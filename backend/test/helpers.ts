@@ -54,34 +54,223 @@ export async function loginApitest(): Promise<AuthState> {
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 
-async function _performLogin(attempt = 1): Promise<AuthState> {
-  const res = await fetch(`${BASE_URL}/auth/login`, {
+// ─── 2FA / Mailpit helpers (FEAT_2FA_EMAIL_MASTERPLAN Session 10) ────────────
+//
+// Phase 2 hardcoded email-based 2FA on every password login (DD-10 removed —
+// no flag, no opt-out). Every test that needs an authenticated session now has
+// to: log in → capture `challengeToken` cookie → fetch the code mail from
+// Mailpit → POST /auth/2fa/verify → extract access/refresh tokens from cookies.
+//
+// `info@assixx.com` is the test-tenant root (users.id=1, verified via psql
+// probe 2026-04-29). `_performLogin` below caches the resulting token pair
+// once per suite run (`_cachedAuth`) — only the first call pays the 2FA cost.
+//
+// Mailpit runs on `localhost:8025` (Web-UI + REST), SMTP on `mailpit:1025`
+// (internal Docker network). Doppler `dev` SMTP_HOST/PORT point at mailpit so
+// the backend's nodemailer transport lands every dev mail in the catcher.
+// See docker-compose.yml `mailpit` service + HOW-TO-DEV-SMTP.md (DD-25).
+//
+// Migration 2026-04-29: replaces maildev (port 1080, GET /email, DELETE
+// /email/all). Mailpit's REST API uses an envelope shape (`{messages: [...]}`)
+// with PascalCase fields and requires a per-ID fetch for the message body —
+// the list endpoint returns metadata + truncated `Snippet` only.
+
+const MAILPIT_URL = 'http://localhost:8025';
+const MAIL_POLL_INTERVAL_MS = 200;
+const MAIL_POLL_TIMEOUT_MS = 10_000;
+/** Test root user id — `info@assixx.com` (verified 2026-04-29 via psql). */
+const APITEST_USER_ID = 1;
+const REDIS_AUTH = 'dev_only_redis_p@ss_a1b2c3d4e5f6g7h8i9j0';
+
+interface MailpitMessageSummary {
+  ID: string;
+  To: Array<{ Address: string }>;
+  Subject: string;
+  Created: string;
+}
+
+interface MailpitMessagesEnvelope {
+  total: number;
+  messages: MailpitMessageSummary[];
+}
+
+interface MailpitMessageDetail {
+  ID: string;
+  Text: string;
+}
+
+/**
+ * Wipe Mailpit's mailbox. Idempotent; safe to call in `beforeEach` for tests
+ * that read 2FA codes — keeps each test's email lookup deterministic.
+ */
+export async function clearMailpit(): Promise<void> {
+  await fetch(`${MAILPIT_URL}/api/v1/messages`, { method: 'DELETE' });
+}
+
+/**
+ * Read the 6-char Crockford-Base32 code from a Mailpit message detail.
+ * Anchored on the `Ihr Bestätigungscode:` prefix that the 2FA template
+ * (`2fa-code.template.ts:174`) writes on its own line — robust against
+ * future intro-copy tweaks. Returns `null` when the body is empty or the
+ * marker is absent.
+ */
+function _extract2faCode(detail: MailpitMessageDetail): string | null {
+  if (typeof detail.Text !== 'string') return null;
+  const m = /Ihr Bestätigungscode:\s*([A-HJKMNP-Z2-9]{6})/.exec(detail.Text);
+  return m?.[1] !== undefined && m[1] !== '' ? m[1] : null;
+}
+
+/**
+ * Walk one Mailpit list-snapshot looking for a 2FA code addressed to
+ * `lowerRecipient`. Per match: GET /api/v1/message/{ID} → regex against
+ * `Text`. Splitting this out keeps `fetchLatest2faCode` below the
+ * SonarJS cognitive-complexity-10 ceiling (`eslint.config.mjs`).
+ */
+async function _scanForCode(
+  envelope: MailpitMessagesEnvelope,
+  lowerRecipient: string,
+): Promise<string | null> {
+  for (const summary of envelope.messages) {
+    const matches = summary.To.some((t) => t.Address.toLowerCase() === lowerRecipient);
+    if (!matches) continue;
+    const detailRes = await fetch(`${MAILPIT_URL}/api/v1/message/${summary.ID}`);
+    const detail = (await detailRes.json()) as MailpitMessageDetail;
+    const code = _extract2faCode(detail);
+    if (code !== null) return code;
+  }
+  return null;
+}
+
+/**
+ * Poll Mailpit for the most recent 2FA code mail addressed to `recipient`.
+ * Returns the 6-char Crockford-Base32 code from the plain-text body.
+ *
+ * Mailpit returns messages newest-first by default (verified via API probe
+ * 2026-04-29). The list endpoint omits the body, so for each candidate we
+ * GET /api/v1/message/{ID} to read `Text` — one extra round-trip per match,
+ * negligible at test-suite scale.
+ *
+ * @throws if no matching mail arrives within `timeoutMs`.
+ */
+export async function fetchLatest2faCode(
+  recipient: string,
+  timeoutMs = MAIL_POLL_TIMEOUT_MS,
+): Promise<string> {
+  const lower = recipient.toLowerCase();
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const res = await fetch(`${MAILPIT_URL}/api/v1/messages`);
+    const envelope = (await res.json()) as MailpitMessagesEnvelope;
+    const code = await _scanForCode(envelope, lower);
+    if (code !== null) return code;
+    await new Promise((r) => setTimeout(r, MAIL_POLL_INTERVAL_MS));
+  }
+  throw new Error(`No 2FA code mail for ${recipient} within ${timeoutMs} ms`);
+}
+
+/**
+ * DEL Redis keys that survive across suite runs and would otherwise poison
+ * subsequent tests:
+ *   - `2fa:lock:{userId}`         (15-min lockout from 5 wrong attempts, DD-6)
+ *   - `2fa:fail-streak:{userId}`  (24-h cumulative fail counter, DD-5)
+ *
+ * Keys carry the `2fa:` keyPrefix from `two-factor-auth.module.ts`. Run
+ * synchronously via `docker exec` — same pattern as `flushThrottleKeys()`.
+ */
+export function clear2faStateForUser(userId: number): void {
+  execSync(
+    `docker exec assixx-redis redis-cli -a '${REDIS_AUTH}' --no-auth-warning DEL '2fa:lock:${userId}' '2fa:fail-streak:${userId}'`,
+    { stdio: 'pipe' },
+  );
+}
+
+/**
+ * Extract a single cookie value from a `Set-Cookie` header array
+ * (`Headers.getSetCookie()`, Node 19.7+). Returns `null` if absent or empty
+ * (cleared cookies emit `name=; Max-Age=0` — the empty value counts as absent
+ * for our purposes).
+ */
+export function extractCookieValue(setCookies: string[], name: string): string | null {
+  for (const sc of setCookies) {
+    const m = new RegExp(`(?:^|;\\s*)${name}=([^;]*)`).exec(sc);
+    if (m && m[1] !== undefined && m[1] !== '') return m[1];
+  }
+  return null;
+}
+
+async function _runLoginRequest(): Promise<Response> {
+  return await fetch(`${BASE_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: APITEST_EMAIL,
-      password: APITEST_PASSWORD,
-    }),
+    body: JSON.stringify({ email: APITEST_EMAIL, password: APITEST_PASSWORD }),
   });
+}
 
-  // Rate limited -- wait and retry
-  if (res.status === 429 && attempt < MAX_RETRIES) {
+async function _runVerifyRequest(challengeToken: string, code: string): Promise<Response> {
+  return await fetch(`${BASE_URL}/auth/2fa/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: `challengeToken=${challengeToken}`,
+    },
+    body: JSON.stringify({ code }),
+  });
+}
+
+async function _performLogin(attempt = 1): Promise<AuthState> {
+  // Pre-clean: wipe stale 2FA state from prior failed runs (lockouts /
+  // fail-streaks) and Mailpit — both are idempotent and cheap.
+  clear2faStateForUser(APITEST_USER_ID);
+  await clearMailpit();
+
+  // Step 1: submit credentials → expect `stage: 'challenge_required'`.
+  const loginRes = await _runLoginRequest();
+  if (loginRes.status === 429 && attempt < MAX_RETRIES) {
     _authPromise = null;
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
     return _performLogin(attempt + 1);
   }
-
-  if (!res.ok) {
+  if (!loginRes.ok) {
     _authPromise = null;
-    throw new Error(`Login failed: ${res.status} ${res.statusText}`);
+    throw new Error(`Login failed: ${loginRes.status} ${loginRes.statusText}`);
   }
 
-  const body = (await res.json()) as JsonBody;
+  const loginBody = (await loginRes.json()) as JsonBody;
+  if (loginBody.data.stage !== 'challenge_required') {
+    // Defensive: under v0.5.0 (DD-10 removed) `/auth/login` never returns
+    // `'authenticated'`. If it ever does, OAuth was misrouted — fail loud.
+    _authPromise = null;
+    throw new Error(`Unexpected login stage: ${String(loginBody.data.stage)}`);
+  }
+
+  const challengeToken = extractCookieValue(loginRes.headers.getSetCookie(), 'challengeToken');
+  if (challengeToken === null) {
+    _authPromise = null;
+    throw new Error('challengeToken cookie missing from /auth/login response');
+  }
+
+  // Step 2: fetch the code from Mailpit + verify.
+  const code = await fetchLatest2faCode(APITEST_EMAIL);
+  const verifyRes = await _runVerifyRequest(challengeToken, code);
+  if (!verifyRes.ok) {
+    _authPromise = null;
+    throw new Error(`2FA verify failed: ${verifyRes.status} ${verifyRes.statusText}`);
+  }
+
+  const verifyBody = (await verifyRes.json()) as JsonBody;
+  const setCookies = verifyRes.headers.getSetCookie();
+  const accessToken = extractCookieValue(setCookies, 'accessToken');
+  const refreshToken = extractCookieValue(setCookies, 'refreshToken');
+  if (accessToken === null || refreshToken === null) {
+    _authPromise = null;
+    throw new Error('access/refresh token cookies missing from /auth/2fa/verify response');
+  }
+
   _cachedAuth = {
-    authToken: body.data.accessToken,
-    refreshToken: body.data.refreshToken,
-    userId: body.data.user.id,
-    tenantId: body.data.user.tenantId,
+    authToken: accessToken,
+    refreshToken,
+    userId: verifyBody.data.user.id as number,
+    tenantId: verifyBody.data.user.tenantId as number,
   };
   return _cachedAuth;
 }
