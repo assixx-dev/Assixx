@@ -1,7 +1,11 @@
 <script lang="ts">
-  import { showSuccessAlert, showErrorAlert } from '$lib/utils';
+  import { goto, invalidateAll } from '$app/navigation';
+  import { resolve } from '$app/paths';
 
-  import { createDummy, deleteDummy, listDummies, logApiError, updateDummy } from './_lib/api';
+  import { showSuccessAlert, showErrorAlert } from '$lib/utils';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
+
+  import { createDummy, deleteDummy, logApiError, updateDummy } from './_lib/api';
   import { createDummyMessages } from './_lib/constants';
   import DeleteConfirmModal from './_lib/DeleteConfirmModal.svelte';
   import DummyFormModal from './_lib/DummyFormModal.svelte';
@@ -17,88 +21,87 @@
     UpdateDummyPayload,
   } from './_lib/types';
 
-  // =============================================================================
-  // SSR DATA
-  // =============================================================================
+  // ============================================================================
+  // SSR DATA — URL is the single source of truth for page / search / status.
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.2: there is NO client `$state`
+  // shadow copy of these — every change goes through `goto()` → load re-run.
+  // ============================================================================
 
   const { data }: { data: PageData } = $props();
 
-  // Hierarchy labels from layout data inheritance (A6)
   const labels = $derived(data.hierarchyLabels);
   const messages = $derived(createDummyMessages(labels));
 
-  // =============================================================================
-  // CLIENT STATE
-  // =============================================================================
+  const dummies = $derived(data.dummies);
+  const teams = $derived(data.teams);
+  const pagination = $derived(data.pagination);
+  const searchTerm = $derived(data.search);
+  const statusFilter = $derived(data.statusFilter);
 
-  let clientDummies = $state<DummyUser[] | null>(null);
-  let statusFilter = $state<number | 'all'>('all');
-  let searchTerm = $state('');
-  let currentPage = $state(1);
-  let clientTotalPages = $state<number | null>(null);
-  let loading = $state(false);
+  // ============================================================================
+  // MODAL CLIENT STATE — only modal open/close + submit lock are local.
+  // ============================================================================
 
-  // Modal state
   let showFormModal = $state(false);
   let formMode = $state<'create' | 'edit'>('create');
   let editingDummy = $state<DummyUser | null>(null);
   let submitting = $state(false);
 
-  // Delete flow
   let showDeleteModal = $state(false);
   let deletingDummy = $state<DummyUser | null>(null);
 
-  // =============================================================================
-  // DERIVED
-  // =============================================================================
+  // ============================================================================
+  // URL HELPERS
+  // ============================================================================
 
-  const dummies = $derived(clientDummies ?? data.dummies);
-  const teams = $derived(data.teams);
-  const totalPages = $derived(clientTotalPages ?? data.totalPages);
+  const BASE_PATH = '/manage-dummies';
 
-  // =============================================================================
-  // DATA LOADING
-  // =============================================================================
+  /**
+   * Build an href for a target page, preserving current search + status.
+   * Used by both numbered page links and prev/next buttons.
+   * `buildPaginatedHref` skips defaults (page=1 / search='' / undefined),
+   * so canonical first-page URLs are clean (`/manage-dummies` with no query).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchTerm,
+        isActive: statusFilter === 'all' ? undefined : String(statusFilter),
+      }),
+    );
+  }
 
-  async function loadDummies(): Promise<void> {
-    loading = true;
-    try {
-      const filters: { isActive?: number | 'all'; search?: string } = {};
-      if (statusFilter !== 'all') filters.isActive = statusFilter;
-      if (searchTerm !== '') filters.search = searchTerm;
-
-      const result = await listDummies(currentPage, 20, filters);
-      clientDummies = result.items;
-      const ps = result.pageSize > 0 ? result.pageSize : 20;
-      clientTotalPages = Math.ceil(result.total / ps);
-    } catch (err: unknown) {
-      logApiError('loadDummies', err);
-      showErrorAlert('Fehler beim Laden der Dummy-Benutzer');
-    } finally {
-      loading = false;
-    }
+  /**
+   * Navigate to a new filter/search state. Page resets to 1 (the default,
+   * so it's not emitted into the URL — `?page=1` would be redundant).
+   */
+  function navigateFilters(next: { search?: string; statusFilter?: number | 'all' }): void {
+    const nextSearch = next.search ?? searchTerm;
+    const nextStatus = next.statusFilter ?? statusFilter;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1
+        search: nextSearch,
+        isActive: nextStatus === 'all' ? undefined : String(nextStatus),
+      }),
+    );
+    void goto(href, { keepFocus: true });
   }
 
   function handleStatusFilter(value: number | 'all'): void {
-    statusFilter = value;
-    currentPage = 1;
-    void loadDummies();
+    navigateFilters({ statusFilter: value });
   }
 
   function handleSearch(term: string): void {
-    searchTerm = term;
-    currentPage = 1;
-    void loadDummies();
+    // SearchBar already debounces (300 ms) — see `_lib/SearchBar.svelte`.
+    navigateFilters({ search: term });
   }
 
-  function handlePageChange(page: number): void {
-    currentPage = page;
-    void loadDummies();
-  }
-
-  // =============================================================================
-  // MODAL HANDLERS
-  // =============================================================================
+  // ============================================================================
+  // MODAL HANDLERS — mutations call `invalidateAll()` to retrigger the load
+  // function so the current page re-fetches with the same URL state.
+  // ============================================================================
 
   function openCreateModal(): void {
     formMode = 'create';
@@ -151,7 +154,8 @@
         showSuccessAlert('Dummy-Benutzer erstellt');
       }
       closeFormModal();
-      await loadDummies();
+      // Retrigger the SSR load on the SAME URL (preserves ?page / ?search).
+      await invalidateAll();
     } catch (err: unknown) {
       logApiError('saveDummy', err);
       showErrorAlert('Fehler beim Speichern');
@@ -167,7 +171,7 @@
       await deleteDummy(deletingDummy.uuid);
       showSuccessAlert('Dummy-Benutzer wurde gelöscht');
       closeDeleteModal();
-      await loadDummies();
+      await invalidateAll();
     } catch (err: unknown) {
       logApiError('deleteDummy', err);
       showErrorAlert('Fehler beim Löschen');
@@ -209,14 +213,7 @@
     </div>
 
     <div class="card__body">
-      {#if loading}
-        <div class="empty-state">
-          <div class="empty-state__icon">
-            <i class="fas fa-spinner fa-spin"></i>
-          </div>
-          <p class="empty-state__description">{messages.LOADING}</p>
-        </div>
-      {:else if dummies.length === 0}
+      {#if dummies.length === 0}
         <div class="empty-state">
           <div class="empty-state__icon">
             <i class="fas fa-desktop"></i>
@@ -246,48 +243,71 @@
           ondelete={openDeleteModal}
         />
 
-        <!-- Pagination -->
-        {#if totalPages > 1}
+        <!-- Pagination — URL-driven, anchor-based for native back/forward + right-click support -->
+        {#if pagination.totalPages > 1}
           <nav
             class="pagination mt-6"
             aria-label="Seitennavigation"
           >
-            <button
-              type="button"
-              class="pagination__btn pagination__btn--prev"
-              disabled={currentPage <= 1}
-              onclick={() => {
-                handlePageChange(currentPage - 1);
-              }}
-            >
-              <i class="fas fa-chevron-left"></i>
-              Zurück
-            </button>
+            {#if pagination.hasPrev}
+              <a
+                class="pagination__btn pagination__btn--prev"
+                href={pageHref(pagination.page - 1)}
+                rel="prev"
+              >
+                <i class="fas fa-chevron-left"></i>
+                Zurück
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--prev"
+                disabled
+              >
+                <i class="fas fa-chevron-left"></i>
+                Zurück
+              </button>
+            {/if}
+
             <div class="pagination__pages">
-              {#each Array.from({ length: totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
-                <button
-                  type="button"
-                  class="pagination__page"
-                  class:pagination__page--active={page === currentPage}
-                  onclick={() => {
-                    handlePageChange(page);
-                  }}
-                >
-                  {page}
-                </button>
+              {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
+                {#if page === pagination.page}
+                  <span
+                    class="pagination__page pagination__page--active"
+                    aria-current="page"
+                  >
+                    {page}
+                  </span>
+                {:else}
+                  <a
+                    class="pagination__page"
+                    href={pageHref(page)}
+                  >
+                    {page}
+                  </a>
+                {/if}
               {/each}
             </div>
-            <button
-              type="button"
-              class="pagination__btn pagination__btn--next"
-              disabled={currentPage >= totalPages}
-              onclick={() => {
-                handlePageChange(currentPage + 1);
-              }}
-            >
-              Weiter
-              <i class="fas fa-chevron-right"></i>
-            </button>
+
+            {#if pagination.hasNext}
+              <a
+                class="pagination__btn pagination__btn--next"
+                href={pageHref(pagination.page + 1)}
+                rel="next"
+              >
+                Weiter
+                <i class="fas fa-chevron-right"></i>
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--next"
+                disabled
+              >
+                Weiter
+                <i class="fas fa-chevron-right"></i>
+              </button>
+            {/if}
           </nav>
         {/if}
       {/if}

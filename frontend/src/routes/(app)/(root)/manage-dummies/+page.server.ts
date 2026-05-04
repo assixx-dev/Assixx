@@ -1,33 +1,40 @@
 /**
- * Manage Dummies — Server-Side Data Loading
+ * Manage Dummies — Server-Side Data Loading (Phase 3.2 reference impl)
  * @module manage-dummies/+page.server
  *
- * SSR: Loads dummy users + teams in parallel for instant page render.
- * Protected by (admin) layout group — only admin/root can access.
+ * URL is the single source of truth for pagination + filter state per
+ * FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.2. SvelteKit re-runs this
+ * load on every navigation; the page-level mutation handlers call
+ * `invalidateAll()` to retrigger it after create/update/delete. There is
+ * NO client-side state for `page` / `search` / `isActive` — the URL holds
+ * all three, and `+page.svelte` reads them straight from `data` without
+ * a `$state` shadow copy.
+ *
+ * Protected by `(root)/+layout.server.ts` group guard (ADR-012); only
+ * role=root reaches this load function.
  */
 import { redirect } from '@sveltejs/kit';
 
-import { apiFetch } from '$lib/server/api-fetch';
+import { apiFetch, apiFetchPaginated } from '$lib/server/api-fetch';
 import { buildLoginUrl } from '$lib/utils/build-apex-url';
+import { readFilterFromUrl, readPageFromUrl, readSearchFromUrl } from '$lib/utils/url-pagination';
 
 import type { PageServerLoad } from './$types';
-import type { DummyUser, PaginatedDummies, Team } from './_lib/types';
+import type { DummyUser, Team } from './_lib/types';
 
-function extractDummies(data: PaginatedDummies | null): {
-  dummies: DummyUser[];
-  totalPages: number;
-  totalItems: number;
-} {
-  if (data === null || !Array.isArray(data.items)) {
-    return { dummies: [], totalPages: 1, totalItems: 0 };
-  }
-  const pageSize = data.pageSize > 0 ? data.pageSize : 20;
-  return {
-    dummies: data.items,
-    totalPages: Math.ceil(data.total / pageSize),
-    totalItems: data.total,
-  };
-}
+/**
+ * Status filter URL allow-list. The values mirror IS_ACTIVE codes from
+ * `@assixx/shared/constants` (1=active, 0=inactive, 3=archived) plus 'all'
+ * as the no-filter sentinel — string-typed because `URL.searchParams.get`
+ * always returns strings and `readFilterFromUrl` is a string-enum parser.
+ * Same alias the backend `dummy-users` `?isActive=N` query param accepts,
+ * so server-side mapping is a one-line passthrough below.
+ */
+const STATUS_FILTERS = ['all', '0', '1', '3'] as const;
+type StatusFilter = (typeof STATUS_FILTERS)[number];
+
+/** Fixed page size for the reference impl. Phase 4 pages may parameterise. */
+const PAGE_SIZE = 20;
 
 export const load: PageServerLoad = async ({ cookies, fetch, url }) => {
   const token = cookies.get('accessToken');
@@ -35,13 +42,32 @@ export const load: PageServerLoad = async ({ cookies, fetch, url }) => {
     redirect(302, buildLoginUrl('session-expired', undefined, url));
   }
 
-  const [dummiesData, teamsData] = await Promise.all([
-    apiFetch<PaginatedDummies>('/dummy-users?page=1&limit=20', token, fetch),
+  // URL → state. Each helper falls back to a defined default on missing or
+  // tampered input — see `frontend/src/lib/utils/url-pagination.ts`.
+  const page = readPageFromUrl(url);
+  const search = readSearchFromUrl(url);
+  const status = readFilterFromUrl<StatusFilter>(url, 'isActive', STATUS_FILTERS, 'all');
+
+  // State → backend query string. Defaults are NEVER sent to the backend
+  // (R5 mitigation §0.2: clean canonical URLs for default state).
+  const params = new URLSearchParams();
+  params.set('page', String(page));
+  params.set('limit', String(PAGE_SIZE));
+  if (search !== '') params.set('search', search);
+  if (status !== 'all') params.set('isActive', status);
+
+  const [dummiesResult, teamsData] = await Promise.all([
+    apiFetchPaginated<DummyUser>(`/dummy-users?${params.toString()}`, token, fetch),
     apiFetch<Team[]>('/teams', token, fetch),
   ]);
 
-  const { dummies, totalPages, totalItems } = extractDummies(dummiesData);
-  const teams: Team[] = Array.isArray(teamsData) ? teamsData : [];
-
-  return { dummies, teams, totalPages, totalItems };
+  return {
+    dummies: dummiesResult.data,
+    pagination: dummiesResult.pagination,
+    teams: Array.isArray(teamsData) ? teamsData : [],
+    search,
+    // Convert string back to the `number | 'all'` type the existing
+    // `StatusFilterTabs` component expects. Single conversion point.
+    statusFilter: status === 'all' ? ('all' as const) : Number.parseInt(status, 10),
+  };
 };
