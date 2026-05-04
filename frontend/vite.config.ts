@@ -78,7 +78,17 @@ export default defineConfig(({ mode }) => ({
     proxy: {
       '/api': {
         target: 'http://localhost:3000',
-        changeOrigin: true,
+        // ADR-050 Local-Subdomain-Routing: changeOrigin MUSS false bleiben.
+        // Bei true rewriten http-proxy-middleware den Host-Header auf
+        // `localhost:3000` — der `JwtAuthGuard.canActivate()` (backend/src/nest/
+        // common/guards/jwt-auth.guard.ts:132) würde dann CROSS_TENANT_HOST_
+        // MISMATCH werfen, weil die JWT-tenantId aus dem Login auf dem Tenant-
+        // Subdomain (z. B. `assixx.localhost`) nicht mehr zum apex-Host passt.
+        // Frontend api-client.ts:424 reagiert auf den 403-Code mit hard-redirect
+        // zur apex Login-Page → User landet auf `/login?session=expired` obwohl
+        // der Token frisch ist. Mit `false` reicht Vite den Original-Host
+        // (`<slug>.localhost:5173`) durch → Tenant-Host-Resolver matched.
+        changeOrigin: false,
         // Ausnahme: /api/turnstile wird von SvelteKit selbst bedient
         // (siehe frontend/src/routes/api/turnstile/+server.ts). Ohne
         // diesen Bypass würde der Request an NestJS:3000 laufen und
@@ -94,7 +104,9 @@ export default defineConfig(({ mode }) => ({
       },
       '/uploads': {
         target: 'http://localhost:3000',
-        changeOrigin: true,
+        // Gleiche Logik wie `/api` — Uploads/Downloads laufen ebenfalls durch
+        // den JwtAuthGuard (ADR-050). Host-Preservation nötig.
+        changeOrigin: false,
       },
     },
 
