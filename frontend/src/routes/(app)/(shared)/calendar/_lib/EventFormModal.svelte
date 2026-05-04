@@ -428,8 +428,12 @@
             class="dropdown__trigger"
             class:active={recurrenceDropdownOpen}
             onclick={() => {
-              closeAllDropdowns();
+              // Toggle SELF first; the previous order (closeAllDropdowns →
+              // !recurrenceDropdownOpen) zeroed the state before negating,
+              // so !false was always true → trigger never closed.
+              // Mutual-exclude afterwards by closing the sibling on open.
               recurrenceDropdownOpen = !recurrenceDropdownOpen;
+              if (recurrenceDropdownOpen) recurrenceEndDropdownOpen = false;
             }}
           >
             <span>{selectedRecurrenceText}</span>
@@ -466,8 +470,9 @@
               class="dropdown__trigger"
               class:active={recurrenceEndDropdownOpen}
               onclick={() => {
-                closeAllDropdowns();
+                // Same toggle-order fix as the recurrence trigger above.
                 recurrenceEndDropdownOpen = !recurrenceEndDropdownOpen;
+                if (recurrenceEndDropdownOpen) recurrenceDropdownOpen = false;
               }}
             >
               <span>{selectedRecurrenceEndText}</span>

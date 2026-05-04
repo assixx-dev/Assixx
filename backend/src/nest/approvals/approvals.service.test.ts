@@ -260,9 +260,9 @@ describe('ApprovalsService', () => {
       const result = await service.findAll({}, 5, 10);
 
       expect(result.items).toHaveLength(2);
-      expect(result.total).toBe(2);
-      expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(20);
+      expect(result.pagination.total).toBe(2);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(20);
     });
 
     it('should apply status filter', async () => {
@@ -315,7 +315,11 @@ describe('ApprovalsService', () => {
       const result = await service.findAll({}, 5, 10);
 
       expect(result.items).toHaveLength(0);
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
+      // `totalPages = 0` when no rows — keeps the FE empty-state branch
+      // (`total === 0`) and `hasNext = page < totalPages` coherent. Mirrors
+      // dummy-users (Phase 3.1) and users (Phase 4.1a) precedent.
+      expect(result.pagination.totalPages).toBe(0);
     });
 
     it('should default total to 0 when COUNT returns no rows', async () => {
@@ -324,7 +328,7 @@ describe('ApprovalsService', () => {
 
       const result = await service.findAll({}, 5, 10);
 
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
       expect(result.items).toHaveLength(0);
     });
 
@@ -336,8 +340,10 @@ describe('ApprovalsService', () => {
 
       const result = await service.findAll({ page: 3, limit: 10 }, 5, 10);
 
-      expect(result.page).toBe(3);
-      expect(result.pageSize).toBe(10);
+      expect(result.pagination.page).toBe(3);
+      expect(result.pagination.limit).toBe(10);
+      // 50 rows / limit 10 → 5 pages. Math.ceil contract verified.
+      expect(result.pagination.totalPages).toBe(5);
 
       // Verify LIMIT and OFFSET in the data query
       const dataCall = mockClient.query.mock.calls[1] as [string, unknown[]];
@@ -512,7 +518,7 @@ describe('ApprovalsService', () => {
       const result = await service.findByAssignee(999, 10, {});
 
       expect(result.items).toHaveLength(0);
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
     });
 
     it('should default total to 0 when COUNT returns no rows', async () => {
@@ -521,7 +527,7 @@ describe('ApprovalsService', () => {
 
       const result = await service.findByAssignee(20, 10, {});
 
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
       expect(result.items).toHaveLength(0);
     });
 
@@ -531,8 +537,8 @@ describe('ApprovalsService', () => {
 
       const result = await service.findByAssignee(20, 10, { page: 2, limit: 10 });
 
-      expect(result.page).toBe(2);
-      expect(result.pageSize).toBe(10);
+      expect(result.pagination.page).toBe(2);
+      expect(result.pagination.limit).toBe(10);
       const dataCall = mockClient.query.mock.calls[1] as [string, unknown[]];
       expect(dataCall[1]).toContain(10); // limit
       expect(dataCall[1]).toContain(10); // offset = (2-1)*10

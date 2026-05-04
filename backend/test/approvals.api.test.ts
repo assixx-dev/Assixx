@@ -148,14 +148,22 @@ describe('Approvals: List All', () => {
     expect(res.status).toBe(200);
   });
 
-  it('should return paginated result', () => {
-    expect(body.data).toHaveProperty('items');
-    expect(body.data).toHaveProperty('total');
-    expect(body.data).toHaveProperty('page');
+  // ResponseInterceptor extracts the service's `items[]` into `data` and
+  // forwards `pagination` verbatim into `meta.pagination` (Phase 4.3a:
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN changelog 1.13.0). Mirrors
+  // the canonical dummy-users (Phase 3.1) and users (Phase 4.1a) envelope.
+  it('should return canonical ADR-007 envelope', () => {
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta?.pagination).toBeDefined();
+    expect(typeof body.meta.pagination.page).toBe('number');
+    expect(typeof body.meta.pagination.limit).toBe('number');
+    expect(typeof body.meta.pagination.total).toBe('number');
+    expect(typeof body.meta.pagination.totalPages).toBe('number');
   });
 
   it('should contain the created approval', () => {
-    expect(body.data.total).toBeGreaterThanOrEqual(1);
+    expect(body.meta.pagination.total).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -44,12 +44,26 @@ export interface ApprovalFilters {
   limit?: number | undefined;
 }
 
-/** Paginated response */
+/**
+ * Paginated response — ADR-007 envelope shape.
+ *
+ * WHY this shape (and not the legacy `{items,total,page,pageSize}`):
+ * The `ResponseInterceptor` (`backend/src/nest/common/interceptors/response.interceptor.ts`)
+ * detects `{items, pagination}` and lifts `pagination` into `body.meta.pagination`,
+ * leaving `body.data` as the bare items array. The frontend
+ * `apiFetchPaginated<T>` helper rejects anything else
+ * (`frontend/src/lib/server/api-fetch.ts:217 isCompletePagination`).
+ * Renamed in Phase 4.3a (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN, changelog 1.13.0)
+ * — same migration as `dummy-users` (Phase 3.1) and `users` (Phase 4.1a).
+ */
 interface PaginatedApprovals {
   items: Approval[];
-  total: number;
-  page: number;
-  pageSize: number;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 /** Base SELECT with JOINed user names (no read-tracking) */
@@ -147,11 +161,14 @@ export class ApprovalsService {
           [...params, limit, offset, userId, tenantId],
         );
 
+        // `totalPages = total === 0 ? 0 : Math.ceil(total / limit)` keeps the
+        // FE empty-state branch (`total === 0`) and the page-bounds derivation
+        // (`hasNext = page < totalPages`) coherent — same math as dummy-users
+        // (Phase 3.1) and users (Phase 4.1a).
+        const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
         return {
           items: dataResult.rows.map(mapApprovalRowToApi),
-          total,
-          page,
-          pageSize: limit,
+          pagination: { page, limit, total, totalPages },
         };
       },
     );
@@ -214,11 +231,10 @@ export class ApprovalsService {
           [...params, limit, offset, userId, tenantId],
         );
 
+        const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
         return {
           items: dataResult.rows.map(mapApprovalRowToApi),
-          total,
-          page,
-          pageSize: limit,
+          pagination: { page, limit, total, totalPages },
         };
       },
     );

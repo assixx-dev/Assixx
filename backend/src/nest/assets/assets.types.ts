@@ -151,6 +151,28 @@ export interface AssetFilters {
   search?: string;
 }
 
+/**
+ * Paginated list response for /assets — ADR-007 envelope.
+ *
+ * Service returns this shape; the global ResponseInterceptor recognises
+ * `{items, pagination}` and lifts `pagination` into `body.meta.pagination`
+ * while putting `items` into `body.data`. Mirrors dummy-users / users /
+ * approvals — see Phase-3 §3.1, Phase 4.1a, Phase 4.3a.
+ *
+ * @see backend/src/nest/common/interceptors/response.interceptor.ts (isPaginatedResponse)
+ * @see docs/infrastructure/adr/ADR-007-api-response-standardization.md
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4a (Session 7c, 2026-05-05)
+ */
+export interface PaginatedAssetResponse {
+  items: AssetResponse[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
 /** API Asset response */
 export interface AssetResponse {
   id: number;

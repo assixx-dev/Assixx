@@ -40,6 +40,7 @@ import type {
   DbAssetRow,
   MaintenanceHistoryResponse,
   MaintenanceRecordRequest,
+  PaginatedAssetResponse,
 } from './assets.types.js';
 
 @Injectable()
@@ -58,13 +59,54 @@ export class AssetsService {
   // ============================================================================
 
   /**
-   * List all assets with filters
-   * Excludes soft-deleted assets (is_active = 4) by default
+   * List assets — server-driven pagination (ADR-007 envelope).
+   *
+   * Returns `{items, pagination:{page,limit,total,totalPages}}` so the global
+   * ResponseInterceptor can lift `pagination` → `body.meta.pagination`. Excludes
+   * soft-deleted (`is_active = ${IS_ACTIVE.DELETED}`).
+   *
+   * Two-query strategy: COUNT + paginated SELECT. COUNT runs against the base
+   * table only (no JOINs needed — every filter in `buildAssetFilterClauses`
+   * targets `m.*` columns or `EXISTS` sub-queries). The full join + json_agg
+   * teams sub-query then runs ONLY for the page slice — material perf win
+   * vs. enriching every tenant row.
+   *
+   * `sortBy`/`sortOrder` from `ListAssetsQueryDto` are validated request-side
+   * but unused here — `ORDER BY m.name ASC` is preserved as the alphabetical
+   * default. The FE migration (Phase 4.4b, Session 7d) wires the toggle UI;
+   * landing them together keeps that one diff atomic. See masterplan §4.4a.
+   *
+   * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4a (Session 7c, 2026-05-05)
+   * @see docs/infrastructure/adr/ADR-007-api-response-standardization.md
    */
-  async listAssets(tenantId: number, filters: AssetFilters = {}): Promise<AssetResponse[]> {
-    this.logger.debug(`Listing assets for tenant ${tenantId}`);
+  async listAssets(
+    tenantId: number,
+    page: number,
+    limit: number,
+    filters: AssetFilters = {},
+  ): Promise<PaginatedAssetResponse> {
+    this.logger.debug(`Listing assets for tenant ${tenantId} (page=${page}, limit=${limit})`);
 
-    const baseSql = `
+    const { clauses, params: filterParams } = buildAssetFilterClauses(filters, 2);
+
+    const countSql = `
+      SELECT COUNT(*)::int AS total
+      FROM assets m
+      WHERE m.tenant_id = $1 AND m.is_active != ${IS_ACTIVE.DELETED}
+      ${clauses}
+    `;
+    const countRows = await this.db.tenantQuery<{ total: number }>(countSql, [
+      tenantId,
+      ...filterParams,
+    ]);
+    const total = countRows[0]?.total ?? 0;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+
+    const offset = (page - 1) * limit;
+    const limitIdx = 2 + filterParams.length;
+    const offsetIdx = limitIdx + 1;
+
+    const listSql = `
       SELECT m.*,
              d.name as department_name,
              a.name as area_name,
@@ -82,13 +124,22 @@ export class AssetsService {
       LEFT JOIN areas a ON m.area_id = a.id AND a.tenant_id = m.tenant_id
       LEFT JOIN users u1 ON m.created_by = u1.id
       LEFT JOIN users u2 ON m.updated_by = u2.id
-      WHERE m.tenant_id = $1 AND m.is_active != ${IS_ACTIVE.DELETED}`;
+      WHERE m.tenant_id = $1 AND m.is_active != ${IS_ACTIVE.DELETED}
+      ${clauses}
+      ORDER BY m.name ASC
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}
+    `;
+    const rows = await this.db.tenantQuery<DbAssetRow>(listSql, [
+      tenantId,
+      ...filterParams,
+      limit,
+      offset,
+    ]);
 
-    const { clauses, params } = buildAssetFilterClauses(filters, 2);
-    const sql = `${baseSql} ${clauses} ORDER BY m.name ASC`;
-
-    const rows = await this.db.tenantQuery<DbAssetRow>(sql, [tenantId, ...params]);
-    return rows.map((row: DbAssetRow) => mapDbAssetToApi(row));
+    return {
+      items: rows.map((row: DbAssetRow) => mapDbAssetToApi(row)),
+      pagination: { page, limit, total, totalPages },
+    };
   }
 
   /**

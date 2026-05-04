@@ -51,6 +51,26 @@ describe('Assets: List', () => {
       _existingAssetId = body.data[0].id;
     }
   });
+
+  // Canonical ADR-007 envelope assertion — masterplan §4.4a (Session 7c, 2026-05-05).
+  // ResponseInterceptor lifts service `{items, pagination}` → `body.data` / `body.meta.pagination`.
+  // Mirrors dummy-users (Phase 3.1) / users (Phase 4.1a) / approvals (Phase 4.3a) tests.
+  it('should return canonical ADR-007 envelope (page/limit/total/totalPages)', async () => {
+    const res = await fetch(`${BASE_URL}/assets`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta).toBeDefined();
+    expect(body.meta.pagination).toBeDefined();
+    expect(typeof body.meta.pagination.page).toBe('number');
+    expect(typeof body.meta.pagination.limit).toBe('number');
+    expect(typeof body.meta.pagination.total).toBe('number');
+    expect(typeof body.meta.pagination.totalPages).toBe('number');
+  });
 });
 
 // ---- seq: 2 -- Create Asset (Admin) ----------------------------------------

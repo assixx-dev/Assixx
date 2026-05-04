@@ -86,25 +86,73 @@ describe('AssetsService – DB-mocked methods', () => {
     mockTeams = result.mockTeams;
   });
 
+  // listAssets — server-driven pagination (ADR-007 envelope, masterplan §4.4a Session 7c).
+  // Service makes TWO `tenantQuery` calls per invocation: COUNT first, then paginated SELECT.
+  // Filter clauses must apply to BOTH queries (correctness — page count must match page contents).
   describe('listAssets', () => {
-    it('should include team_id filter using EXISTS on asset_teams', async () => {
-      mockDb.tenantQuery.mockResolvedValueOnce([]);
+    it('should include team_id filter using EXISTS on asset_teams (in both COUNT and SELECT)', async () => {
+      mockDb.tenantQuery
+        .mockResolvedValueOnce([{ total: 0 }]) // COUNT
+        .mockResolvedValueOnce([]); // SELECT
 
-      await service.listAssets(1, { team_id: 468 });
+      await service.listAssets(1, 1, 20, { team_id: 468 });
 
-      const sql = mockDb.tenantQuery.mock.calls[0][0] as string;
-      expect(sql).toContain('asset_teams');
-      expect(sql).toContain('mt2.team_id');
+      const countSql = mockDb.tenantQuery.mock.calls[0][0] as string;
+      const listSql = mockDb.tenantQuery.mock.calls[1][0] as string;
+      expect(countSql).toContain('mt2.team_id');
+      expect(listSql).toContain('asset_teams');
+      expect(listSql).toContain('mt2.team_id');
       expect(mockDb.tenantQuery.mock.calls[0][1]).toContain(468);
+      expect(mockDb.tenantQuery.mock.calls[1][1]).toContain(468);
     });
 
-    it('should not include team_id filter when not provided', async () => {
-      mockDb.tenantQuery.mockResolvedValueOnce([]);
+    it('should not include team_id filter when not provided (in both COUNT and SELECT)', async () => {
+      mockDb.tenantQuery.mockResolvedValueOnce([{ total: 0 }]).mockResolvedValueOnce([]);
 
-      await service.listAssets(1, {});
+      await service.listAssets(1, 1, 20, {});
 
-      const sql = mockDb.tenantQuery.mock.calls[0][0] as string;
-      expect(sql).not.toContain('mt2.team_id');
+      const countSql = mockDb.tenantQuery.mock.calls[0][0] as string;
+      const listSql = mockDb.tenantQuery.mock.calls[1][0] as string;
+      expect(countSql).not.toContain('mt2.team_id');
+      expect(listSql).not.toContain('mt2.team_id');
+    });
+
+    it('should return canonical ADR-007 envelope with empty result (totalPages = 0, no division-by-zero)', async () => {
+      mockDb.tenantQuery.mockResolvedValueOnce([{ total: 0 }]).mockResolvedValueOnce([]);
+
+      const result = await service.listAssets(1, 1, 20, {});
+
+      expect(result.items).toEqual([]);
+      expect(result.pagination).toEqual({ page: 1, limit: 20, total: 0, totalPages: 0 });
+    });
+
+    it('should compute totalPages with exact-fit math (50 items / limit 10 = 5 pages)', async () => {
+      mockDb.tenantQuery.mockResolvedValueOnce([{ total: 50 }]).mockResolvedValueOnce([]);
+
+      const result = await service.listAssets(1, 5, 10, {});
+
+      expect(result.pagination).toEqual({ page: 5, limit: 10, total: 50, totalPages: 5 });
+    });
+
+    it('should compute totalPages with partial last page (47 items / limit 10 = 5 pages, ceil)', async () => {
+      mockDb.tenantQuery.mockResolvedValueOnce([{ total: 47 }]).mockResolvedValueOnce([]);
+
+      const result = await service.listAssets(1, 1, 10, {});
+
+      expect(result.pagination).toEqual({ page: 1, limit: 10, total: 47, totalPages: 5 });
+    });
+
+    it('should pass LIMIT/OFFSET in SELECT params with offset = (page - 1) * limit', async () => {
+      mockDb.tenantQuery.mockResolvedValueOnce([{ total: 100 }]).mockResolvedValueOnce([]);
+
+      await service.listAssets(1, 3, 25, {});
+
+      const listSql = mockDb.tenantQuery.mock.calls[1][0] as string;
+      const listParams = mockDb.tenantQuery.mock.calls[1][1] as unknown[];
+      expect(listSql).toMatch(/LIMIT \$\d+ OFFSET \$\d+/);
+      // Last two params after tenantId + filterParams: limit, offset.
+      expect(listParams[listParams.length - 2]).toBe(25);
+      expect(listParams[listParams.length - 1]).toBe(50); // (3 - 1) * 25
     });
   });
 

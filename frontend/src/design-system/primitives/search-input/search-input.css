@@ -297,7 +297,7 @@
   border-radius: var(--radius-xl);
   background: var(--color-white);
   box-shadow: 0 8px 24px oklch(66.06% 0.0131 250.22 / 20%);
-  max-height: 300px;
+  max-height: 600px;
   overflow-y: auto;
   animation: search-results-appear 0.15s ease-out;
 }

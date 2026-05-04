@@ -252,13 +252,16 @@ describe('TPM Approval: Verify approval request created', () => {
   });
 
   it('should have at least one TPM approval', () => {
-    const items = body.data?.items as JsonBody[] | undefined;
+    // Phase 4.3a (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN, 2026-05-05): ResponseInterceptor
+    // lifts the service's `items[]` into `body.data` (bare array) and forwards `pagination`
+    // into `body.meta.pagination`. See approvals.service.ts §PaginatedApprovals comment.
+    const items = body.data as JsonBody[] | undefined;
     expect(items).toBeDefined();
     expect(items!.length).toBeGreaterThanOrEqual(1);
   });
 
   it('should reference the created plan as source', () => {
-    const items = body.data?.items as JsonBody[];
+    const items = body.data as JsonBody[];
     const tpmApproval = items.find(
       (a: JsonBody) => a.sourceUuid === planUuid && a.addonCode === 'tpm',
     );
@@ -268,7 +271,7 @@ describe('TPM Approval: Verify approval request created', () => {
   });
 
   it('should include plan name in approval title', () => {
-    const items = body.data?.items as JsonBody[];
+    const items = body.data as JsonBody[];
     const tpmApproval = items.find((a: JsonBody) => a.sourceUuid === planUuid);
     expect(tpmApproval!.title).toContain('TPM Plan:');
   });
@@ -309,7 +312,8 @@ describe('TPM Approval: Edit with pending — no duplicate (D3)', () => {
   });
 
   it('should still have only one pending TPM approval for this plan', () => {
-    const items = approvalsBody.data?.items as JsonBody[];
+    // Phase 4.3a envelope: `data` is the items array, pagination in `meta.pagination`.
+    const items = approvalsBody.data as JsonBody[];
     const tpmPending = items.filter(
       (a: JsonBody) => a.sourceUuid === planUuid && a.addonCode === 'tpm' && a.status === 'pending',
     );
