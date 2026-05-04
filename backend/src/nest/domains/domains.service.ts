@@ -40,8 +40,12 @@
  * coexistence across tenants remains allowed (no squatting-DoS vector).
  *
  * @see docs/FEAT_TENANT_DOMAIN_VERIFICATION_MASTERPLAN.md §2.5
- * @see docs/FEAT_TENANT_DOMAIN_VERIFICATION_MASTERPLAN.md §0.2.5 #4 (freemail at add),
- *      §0.2.5 #10 (verificationInstructions only on add-response).
+ * @see docs/FEAT_TENANT_DOMAIN_VERIFICATION_MASTERPLAN.md §0.2.5 #4 (freemail at add).
+ *      §0.2.5 #10 (one-shot instructions) is REPLACED by ADR-049 amendment
+ *      2026-05-04: instructions are now retrievable on every GET for
+ *      non-verified rows so users have a recovery path after panel dismiss /
+ *      reload — see `mapToResponse()` below.
+ * @see docs/infrastructure/adr/ADR-049-tenant-domain-verification.md
  * @see docs/infrastructure/adr/ADR-019-multi-tenant-rls-isolation.md §6b (tenantTransaction).
  */
 import { IS_ACTIVE } from '@assixx/shared/constants';
@@ -140,13 +144,11 @@ export class DomainsService {
       }
     });
 
-    // Surface TXT instructions ONLY on the immediate add response (§0.2.5 #10).
-    // Subsequent list/verify/patch responses never include them — the token is
-    // persistent on the row and never re-exposed through the API.
-    return this.mapToResponse(row, {
-      txtHost: this.domainVerification.txtHostFor(row.domain),
-      txtValue: this.domainVerification.txtValueFor(row.verification_token),
-    });
+    // mapToResponse derives `verificationInstructions` from row.status — for
+    // pending rows it always emits them. ADR-049 (replaces masterplan §0.2.5
+    // #10 one-shot policy: one-shot was a UX footgun — token loss after
+    // reload/dismiss left users without a recovery path).
+    return this.mapToResponse(row);
   }
 
   async triggerVerify(tenantId: number, domainId: string): Promise<TenantDomain> {
@@ -325,10 +327,7 @@ export class DomainsService {
     }
   }
 
-  private mapToResponse(
-    row: TenantDomainRow,
-    verificationInstructions?: { txtHost: string; txtValue: string },
-  ): TenantDomain {
+  private mapToResponse(row: TenantDomainRow): TenantDomain {
     return {
       id: row.id,
       tenantId: row.tenant_id,
@@ -338,8 +337,27 @@ export class DomainsService {
       verifiedAt: row.verified_at === null ? null : row.verified_at.toISOString(),
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
-      // `exactOptionalPropertyTypes: true` — only include the key when defined.
-      ...(verificationInstructions !== undefined ? { verificationInstructions } : {}),
+      // ADR-049 (replaces masterplan §0.2.5 #10 one-shot policy, 2026-05-04):
+      // emit `verificationInstructions` for any non-verified row so the user
+      // can re-display the TXT record after a panel dismiss / page reload /
+      // SPA navigation. The persistent `verification_token` column on the row
+      // is the source — never rotated, never re-issued, so re-emitting the
+      // same token across every GET is safe (RBAC: controller-level
+      // @Roles('root') + RLS via tenantTransaction restrict access to the
+      // owning tenant's root). Verified rows omit the field — once the claim
+      // is sealed, the TXT record is operationally irrelevant; keeping the
+      // payload lean avoids leaking obsolete tokens to UI consumers that no
+      // longer need them. `exactOptionalPropertyTypes: true` requires the
+      // spread-conditional pattern to omit the key entirely (vs. setting it
+      // to undefined).
+      ...(row.status !== 'verified' ?
+        {
+          verificationInstructions: {
+            txtHost: this.domainVerification.txtHostFor(row.domain),
+            txtValue: this.domainVerification.txtValueFor(row.verification_token),
+          },
+        }
+      : {}),
     };
   }
 }

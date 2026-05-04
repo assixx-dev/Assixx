@@ -12,10 +12,12 @@
 export type TenantDomainStatus = 'pending' | 'verified' | 'failed' | 'expired';
 
 /**
- * DNS TXT record instructions surfaced ONLY on `POST /domains` response per
- * masterplan §0.2.5 #10. List/Get responses omit this field — we MUST NOT rely
- * on it being present on subsequent reads (the verification token is persistent
- * server-side, but only emitted at add-time as a one-shot UX affordance).
+ * DNS TXT record instructions. Emitted by the backend for any non-verified
+ * row on POST /domains AND on every GET response (ADR-049 amendment
+ * 2026-05-04 — replaces masterplan §0.2.5 #10 one-shot policy). The frontend
+ * therefore reads these directly from `data.domains[i].verificationInstructions`
+ * for pending/failed/expired rows; no separate in-memory snapshot needed.
+ * Verified rows omit the field — caller must guard with `!== undefined`.
  */
 export interface VerificationInstructions {
   txtHost: string;

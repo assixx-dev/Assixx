@@ -257,8 +257,9 @@ describe('UsersService', () => {
       const result = await service.listUsers(10, query);
 
       expect(result.data).toHaveLength(2);
-      expect(result.pagination.totalItems).toBe(2);
-      expect(result.pagination.currentPage).toBe(1);
+      expect(result.pagination.total).toBe(2);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(10);
       expect(result.pagination.totalPages).toBe(1);
     });
 
@@ -271,7 +272,7 @@ describe('UsersService', () => {
       const result = await service.listUsers(10, query);
 
       expect(result.data).toHaveLength(0);
-      expect(result.pagination.totalItems).toBe(0);
+      expect(result.pagination.total).toBe(0);
       expect(result.pagination.totalPages).toBe(0);
     });
 
@@ -292,7 +293,7 @@ describe('UsersService', () => {
       const result = await scopedService.listUsers(10, query);
 
       expect(result.data).toHaveLength(0);
-      expect(result.pagination.totalItems).toBe(0);
+      expect(result.pagination.total).toBe(0);
       expect(mockDb.tenantQuery).not.toHaveBeenCalled();
     });
 
@@ -367,7 +368,9 @@ describe('UsersService', () => {
       const result = await service.listUsers(10, query);
 
       expect(result.pagination.totalPages).toBe(3); // ceil(25/10)
-      expect(result.pagination.pageSize).toBe(10);
+      expect(result.pagination.limit).toBe(10);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.total).toBe(25);
     });
   });
 

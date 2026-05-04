@@ -1,9 +1,9 @@
 /**
  * Tenant Domains — UI State (Svelte 5 Runes)
  *
- * Modal open/close, in-flight action ID, instructions-panel target. No backend
- * state lives here — see `state-data.svelte.ts` for that. This split is per
- * the v0.3.4 D24 review: keeping UI state separate makes the §5.4.1
+ * Modal open/close, in-flight action ID, currently-open instructions panel ID.
+ * No backend state lives here — see `state-data.svelte.ts` for that. This split
+ * is per the v0.3.4 D24 review: keeping UI state separate makes the §5.4.1
  * "modal open/close isolation" unit test trivial without dragging in the
  * domains list.
  *
@@ -11,9 +11,20 @@
  * modal/in-flight state is automatically shared between `+page.svelte` and
  * the child components (`AddDomainModal`, `DomainRow`) without prop drilling.
  *
+ * **Instructions panel — single source of truth = `data.domains` (ADR-049
+ * amendment 2026-05-04):** the previous implementation cached
+ * `{id, domain, instructions}` here as a one-shot snapshot from the
+ * `POST /domains` response. That broke after page reload / SPA navigation /
+ * "Schließen" — the token was unrecoverable. The backend now emits
+ * `verificationInstructions` for every non-verified row on every GET, so this
+ * module only needs the row's ID; the page renders the panel by looking up
+ * the row in `data.domains` and reading `row.verificationInstructions`. The
+ * net effect: no flicker between `openInstructionsFor(id)` and `invalidateAll`,
+ * no token loss, no stale in-memory copy.
+ *
  * @see masterplan §5.1 + §5.4.1 (modal-open-close isolation test)
+ * @see docs/infrastructure/adr/ADR-049-tenant-domain-verification.md
  */
-import type { VerificationInstructions } from './types.js';
 
 // --- Add-domain modal state ---
 
@@ -30,18 +41,18 @@ let addModalSubmitting = $state(false);
 
 let pendingActionId = $state<string | null>(null);
 
-// --- Verification instructions panel ---
+// --- Open instructions panel (just an ID) ---
 //
-// Populated when `addDomain()` resolves with `verificationInstructions`.
-// Cleared when the user clicks "Schließen" on the panel. Persists across
-// re-renders (panel doesn't auto-hide on row updates) so the user can copy
-// the TXT host/value at their own pace.
+// Identifies which domain row's TXT instructions are currently surfaced.
+// `null` = no panel open. Set via `openInstructionsFor(id)` after add-success
+// or when the user clicks "TXT anzeigen" on a pending row; cleared by
+// `closeInstructions()` on the panel's "Schließen" button. The panel renders
+// only while the referenced row exists in `data.domains` AND has
+// `status !== 'verified'` (auto-dismiss after successful verify) — that
+// guard lives in `+page.svelte`, not here, so this module stays free of
+// any cross-coupling to `state-data`.
 
-let instructionsPanel = $state<{
-  id: string;
-  domain: string;
-  instructions: VerificationInstructions;
-} | null>(null);
+let openInstructionsId = $state<string | null>(null);
 
 // --- Add-modal getters/setters ---
 
@@ -95,22 +106,14 @@ export function setPendingActionId(id: string | null): void {
 
 // --- Instructions-panel getters/setters ---
 
-export function getInstructionsPanel(): {
-  id: string;
-  domain: string;
-  instructions: VerificationInstructions;
-} | null {
-  return instructionsPanel;
+export function getOpenInstructionsId(): string | null {
+  return openInstructionsId;
 }
 
-export function showInstructions(
-  id: string,
-  domain: string,
-  instructions: VerificationInstructions,
-): void {
-  instructionsPanel = { id, domain, instructions };
+export function openInstructionsFor(id: string): void {
+  openInstructionsId = id;
 }
 
-export function hideInstructions(): void {
-  instructionsPanel = null;
+export function closeInstructions(): void {
+  openInstructionsId = null;
 }

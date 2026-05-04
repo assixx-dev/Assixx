@@ -20,9 +20,19 @@
     onverify: (id: string) => void;
     onprimary: (id: string) => void;
     onremove: (id: string) => void;
+    /**
+     * Re-display the persistent TXT instructions for a non-verified row.
+     * Backend emits `verificationInstructions` on every GET for non-verified
+     * rows (ADR-049 amendment 2026-05-04 — replaces the original one-shot
+     * policy from masterplan §0.2.5 #10), so the page just toggles which
+     * row's panel is open. Required: this prop is the recovery path after
+     * panel dismiss / page reload — without it the user has no way back to
+     * the TXT record short of delete + re-add.
+     */
+    oninstructions: (id: string) => void;
   }
 
-  const { domain, isPending, onverify, onprimary, onremove }: Props = $props();
+  const { domain, isPending, onverify, onprimary, onremove, oninstructions }: Props = $props();
 
   /**
    * Map status → badge variant. The design-system has `--active` / `--warning`
@@ -75,6 +85,32 @@
   <td>{formattedDate}</td>
   <td>
     <div class="flex justify-end gap-2">
+      {#if domain.status !== 'verified' && domain.verificationInstructions !== undefined}
+        <!--
+          Recovery path: re-displays the persistent TXT instructions in the
+          page-level panel. Visible only on non-verified rows (verified rows
+          have `verificationInstructions === undefined` — see types.ts). The
+          `verificationInstructions !== undefined` guard is defensive: the
+          backend contract (ADR-049 amendment 2026-05-04) guarantees the
+          field on non-verified rows, but a stale frontend reading from an
+          older backend would otherwise crash on `undefined`.
+        -->
+        <button
+          type="button"
+          class="btn btn-secondary"
+          onclick={() => {
+            oninstructions(domain.id);
+          }}
+          aria-label="TXT-Eintrag anzeigen"
+          title="TXT-Eintrag anzeigen"
+          data-testid="instructions-btn"
+        >
+          <i
+            class="fas fa-key"
+            aria-hidden="true"
+          ></i>
+        </button>
+      {/if}
       {#if domain.status !== 'verified'}
         <button
           type="button"

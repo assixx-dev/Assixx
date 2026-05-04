@@ -516,11 +516,31 @@ describe('GET /domains — list for apitest (verified tenant)', () => {
     expect(apitestRow).toHaveProperty('updatedAt');
   });
 
-  it('never includes verificationInstructions in list rows (§0.2.5 #10)', async () => {
+  it('emits verificationInstructions for non-verified rows, omits on verified (ADR-049 amendment 2026-05-04)', async () => {
+    // Replaces the original "never on list" contract from masterplan §0.2.5
+    // #10 (one-shot policy). ADR-049 (2026-05-04) makes the persistent token
+    // re-displayable on every GET so users have a recovery path after panel
+    // dismiss / page reload / SPA navigation. Verified rows still omit the
+    // field — once the claim is sealed the TXT record is operationally
+    // irrelevant and we keep the payload lean.
+    //
+    // Filter-then-loop pattern (vs. branching inside a single loop) keeps
+    // assertions out of `if/else` — `vitest/no-conditional-expect` rejects
+    // conditional expects because they hide non-coverage on quiet branches.
     const res = await fetch(`${BASE_URL}/domains`, { headers: authOnly(ROOT_TOKEN) });
     const json = (await res.json()) as JsonBody;
-    for (const row of json.data as JsonBody[]) {
+    const rows = json.data as JsonBody[];
+    const verifiedRows = rows.filter((r) => r.status === 'verified');
+    const nonVerifiedRows = rows.filter((r) => r.status !== 'verified');
+
+    for (const row of verifiedRows) {
       expect(row.verificationInstructions).toBeUndefined();
+    }
+    for (const row of nonVerifiedRows) {
+      const instr = row.verificationInstructions as JsonBody;
+      expect(instr).toBeDefined();
+      expect(instr.txtHost).toMatch(/^_assixx-verify\..+/);
+      expect(instr.txtValue).toMatch(/^assixx-verify=[0-9a-f]{64}$/);
     }
   });
 });

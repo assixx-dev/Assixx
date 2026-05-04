@@ -128,10 +128,22 @@ function setup(): {
 // ============================================================
 
 describe('DomainsService.listForTenant', () => {
-  it('returns the tenant rows mapped to the API shape', async () => {
+  it('emits verificationInstructions for pending rows (ADR-049 amendment 2026-05-04)', async () => {
+    // ADR-049 (replaces masterplan §0.2.5 #10 one-shot policy): every
+    // non-verified row carries the persistent TXT instructions on every GET
+    // so the user can re-display them after a panel dismiss / reload / SPA
+    // navigation. The previous "list omits, only POST emits" contract left
+    // users with no recovery path — flipped here.
     const { service, mockClient } = setup();
     mockClient.query.mockResolvedValueOnce({
-      rows: [makeRow({ domain: 'firma.de', is_primary: true })],
+      rows: [
+        makeRow({
+          domain: 'firma.de',
+          is_primary: true,
+          status: 'pending',
+          verification_token: 'a'.repeat(64),
+        }),
+      ],
     });
 
     const result = await service.listForTenant(42);
@@ -139,9 +151,23 @@ describe('DomainsService.listForTenant', () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.domain).toBe('firma.de');
     expect(result[0]?.isPrimary).toBe(true);
-    // `verificationInstructions` is surfaced only on add-response (§0.2.5 #10).
-    // Omitted entirely on list responses so `exactOptionalPropertyTypes: true`
-    // sees no `undefined`-valued key leaking through JSON.stringify.
+    expect(result[0]?.verificationInstructions).toEqual({
+      txtHost: '_assixx-verify.firma.de',
+      txtValue: `assixx-verify=${'a'.repeat(64)}`,
+    });
+  });
+
+  it('omits verificationInstructions on verified rows (sealed claim — token irrelevant)', async () => {
+    // Once a row is `status='verified'`, the TXT record is operationally
+    // irrelevant — keeping the payload lean avoids leaking obsolete tokens
+    // to UI consumers that no longer need them. `exactOptionalPropertyTypes:
+    // true` requires the key to be entirely absent (vs. set to undefined).
+    const { service, mockClient } = setup();
+    mockClient.query.mockResolvedValueOnce({
+      rows: [makeRow({ status: 'verified', verified_at: new Date() })],
+    });
+
+    const result = await service.listForTenant(42);
     expect(result[0]).not.toHaveProperty('verificationInstructions');
   });
 

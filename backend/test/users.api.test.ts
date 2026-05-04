@@ -103,10 +103,13 @@ describe('Users: List Users (Admin)', () => {
     });
     const body = (await res.json()) as JsonBody;
 
+    // Canonical ADR-007 envelope keys (Phase 4.1a, masterplan §D4) — was previously
+    // currentPage/pageSize/totalItems before the /users → ADR-007 envelope rename.
     expect(body.meta).toHaveProperty('pagination');
-    expect(body.meta.pagination).toHaveProperty('totalItems');
-    expect(body.meta.pagination).toHaveProperty('currentPage');
-    expect(body.meta.pagination).toHaveProperty('pageSize');
+    expect(body.meta.pagination).toHaveProperty('page');
+    expect(body.meta.pagination).toHaveProperty('limit');
+    expect(body.meta.pagination).toHaveProperty('total');
+    expect(body.meta.pagination).toHaveProperty('totalPages');
   });
 });
 
