@@ -38,6 +38,16 @@ export interface Department {
 export interface Admin {
   id: number;
   uuid: string;
+  /**
+   * Backend role on the `users` table. Modelled as the union of
+   * possible drift values so the page-server defensive filter
+   * (`u.role === 'admin'`, see `+page.server.ts`) compiles without
+   * a cast. Backend already filters by `?role=admin`; this is the
+   * second line of defence against a query-param drift bug leaking
+   * employees/roots into the admin list (mirror of manage-employees
+   * Phase 4.1b §0.2 R2 mitigation).
+   */
+  role?: 'admin' | 'root' | 'employee';
   username: string;
   email: string;
   firstName: string;
@@ -127,13 +137,8 @@ export interface ApiResponse<T> {
   data?: T;
 }
 
-/**
- * Pagination page item — UI representation of a page-button slot.
- * Mirrors manage-employees and /logs so the design-system pagination
- * markup can be reused 1:1.
- *
- * @see frontend/src/design-system/primitives/navigation/pagination.css
- */
-export type PaginationPageItem =
-  | { type: 'page'; value: number; active?: boolean }
-  | { type: 'ellipsis' };
+// `PaginationPageItem` removed 2026-05-05 (Phase 4.2 — URL-driven server
+// pagination via `$lib/utils/url-pagination` + `apiFetchPaginated` renders
+// all page-buttons without ellipsis, mirroring the manage-dummies (Phase 3)
+// and manage-employees (Phase 4.1b) reference impls). See `./utils.ts`
+// PAGINATION block for full context.

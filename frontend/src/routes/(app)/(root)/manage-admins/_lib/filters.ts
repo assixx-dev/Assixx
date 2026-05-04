@@ -1,66 +1,21 @@
 // =============================================================================
 // MANAGE ADMINS - FILTER FUNCTIONS (Pure Functions)
 // =============================================================================
+//
+// Phase 4.2 (2026-05-05): `filterByStatus`, `filterBySearch`, and
+// `applyAllFilters` were REMOVED. The page now applies status + search
+// filters server-side via `?isActive=N` and `?search=...` query params on
+// `/users?role=admin` (handled by the backend /users service which already
+// supports both filter params after Phase 4.1a — see masterplan §4.1a).
+//
+// `filterAvailableDepartments` and `filterDepartmentIdsByAreas` are
+// PRESERVED — they implement the area↔department dependency logic in the
+// AdminFormModal (`AdminOrganizationSection.svelte`) and have nothing to do
+// with the page-level admin list filtering.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.2
 
-import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
-
-import { getPositionDisplay } from './utils';
-
-import type { Admin, StatusFilter, Department } from './types';
-
-/** Filter admins by status */
-export function filterByStatus(admins: Admin[], status: StatusFilter): Admin[] {
-  switch (status) {
-    case 'active':
-      return admins.filter((a) => a.isActive === 1);
-    case 'inactive':
-      return admins.filter((a) => a.isActive === 0);
-    case 'archived':
-      return admins.filter((a) => a.isActive === 3);
-    case 'all':
-    default:
-      // Show all except deleted (4)
-      return admins.filter((a) => a.isActive !== 4);
-  }
-}
-
-/**
- * Filter admins by search query.
- * Searches in: full name, email, position, employee number
- */
-export function filterBySearch(
-  admins: Admin[],
-  query: string,
-  labels: HierarchyLabels = DEFAULT_HIERARCHY_LABELS,
-): Admin[] {
-  const term = query.toLowerCase().trim();
-  if (!term) return admins;
-
-  return admins.filter((a) => {
-    const fullName = `${a.firstName} ${a.lastName}`.toLowerCase();
-    const email = a.email.toLowerCase();
-    const position = getPositionDisplay(a.position ?? '', labels).toLowerCase();
-    const employeeNumber = (a.employeeNumber ?? '').toLowerCase();
-
-    return (
-      fullName.includes(term) ||
-      email.includes(term) ||
-      position.includes(term) ||
-      employeeNumber.includes(term)
-    );
-  });
-}
-
-/** Apply all filters in sequence */
-export function applyAllFilters(
-  admins: Admin[],
-  status: StatusFilter,
-  searchQuery: string,
-): Admin[] {
-  let result = filterByStatus(admins, status);
-  result = filterBySearch(result, searchQuery);
-  return result;
-}
+import type { Department } from './types';
 
 /**
  * Filter available departments based on selected areas.
