@@ -10,6 +10,7 @@ import {
   API_BASE,
   apiFetch,
   apiFetchPaginated,
+  apiFetchPaginatedWithPermission,
   apiFetchWithPermission,
   extractResponseData,
 } from './api-fetch';
@@ -616,5 +617,271 @@ describe('apiFetchPaginated – invariants', () => {
     expect(a).not.toBe(b);
     expect(a.data).not.toBe(b.data);
     expect(a.pagination).not.toBe(b.pagination);
+  });
+});
+
+// ─── apiFetchPaginatedWithPermission ────────────────────────────────────────
+//
+// Phase-4 Spec Deviation D6: this is the helper the original Phase-2
+// test-comment (line 475-485 above) named as the future composition point
+// for paginated callers that need permission-aware UI. Adds 403 detection
+// on top of the same envelope-validation logic as `apiFetchPaginated`.
+//
+// Empty-result shape mirrors `apiFetchPaginated` plus `permissionDenied`.
+
+const EMPTY_PERM_RESULT = {
+  data: [],
+  pagination: {
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0,
+    hasNext: false,
+    hasPrev: false,
+  },
+  permissionDenied: false,
+};
+
+describe('apiFetchPaginatedWithPermission – request construction', () => {
+  it('should call fetch with correct URL and headers', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(PAGINATED_BODY));
+
+    await apiFetchPaginatedWithPermission(
+      '/users?role=employee&page=2',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(mockFetch).toHaveBeenCalledWith(`${API_BASE}/users?role=employee&page=2`, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – 403 detection', () => {
+  it('should return permissionDenied: true on 403', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 403));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users?role=employee',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual({
+      data: [],
+      pagination: {
+        page: 1,
+        limit: 10,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false,
+      },
+      permissionDenied: true,
+    });
+  });
+
+  it('should NOT flag permissionDenied on 401', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 401));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should NOT flag permissionDenied on 404', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 404));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users/nonexistent',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should NOT flag permissionDenied on 500', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 500));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – success responses', () => {
+  it('should preserve data + pagination + permissionDenied:false on 2xx', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(PAGINATED_BODY));
+
+    const result = await apiFetchPaginatedWithPermission<{ id: number }>(
+      '/users?role=employee&page=2&limit=25',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual({
+      data: [{ id: 1 }, { id: 2 }],
+      pagination: {
+        page: 2,
+        limit: 25,
+        total: 100,
+        totalPages: 4,
+        hasNext: true,
+        hasPrev: true,
+      },
+      permissionDenied: false,
+    });
+  });
+
+  it('should derive hasPrev=false on first page', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: 1, limit: 25, total: 100, totalPages: 4 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission<{ id: number }>(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.pagination.hasPrev).toBe(false);
+    expect(result.pagination.hasNext).toBe(true);
+    expect(result.permissionDenied).toBe(false);
+  });
+
+  it('should handle empty result envelope (search miss, not denial)', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [],
+        meta: { pagination: { page: 1, limit: 25, total: 0, totalPages: 0 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users?search=nomatch',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.data).toEqual([]);
+    expect(result.pagination.total).toBe(0);
+    // Critical: empty data set is NOT a permission denial.
+    expect(result.permissionDenied).toBe(false);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – malformed envelope', () => {
+  it('should return empty result with permissionDenied:false when meta is missing', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ success: true, data: [{ id: 1 }] }));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should return empty result with permissionDenied:false when data is not an array', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: { id: 1 },
+        meta: { pagination: { page: 1, limit: 10, total: 1, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should return empty result with permissionDenied:false when a pagination field has wrong type', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: '1', limit: 10, total: 1, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – network/parse errors', () => {
+  it('should return empty result with permissionDenied:false on network error', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should return empty result with permissionDenied:false on JSON parse error', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError('Unexpected token')),
+    });
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – invariants', () => {
+  // Same fresh-result invariant as apiFetchPaginated — guards against
+  // refactor-to-shared-singleton.
+  it('should return a fresh empty result per call (no shared reference)', async () => {
+    mockFetch.mockResolvedValue(mockResponse(null, false, 403));
+
+    const a = await apiFetchPaginatedWithPermission('/x', TOKEN, mockFetch as typeof fetch);
+    const b = await apiFetchPaginatedWithPermission('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(a).not.toBe(b);
+    expect(a.pagination).not.toBe(b.pagination);
+    // Both should still flag the denial — invariant is about object identity,
+    // not about value drift.
+    expect(a.permissionDenied).toBe(true);
+    expect(b.permissionDenied).toBe(true);
   });
 });

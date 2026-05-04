@@ -164,15 +164,7 @@ export interface AvailabilityOption {
   label: string;
 }
 
-/**
- * Pagination page item — UI representation of a page-button slot.
- *
- * Mirrors the shape used by /logs (root) so the same pagination markup
- * (design-system/primitives/navigation/pagination.css) can be reused
- * 1:1 here. `ellipsis` slots render "..." gaps when totalPages > 5.
- *
- * @see docs/infrastructure/adr/ADR-017 (design-system theming)
- */
-export type PaginationPageItem =
-  | { type: 'page'; value: number; active?: boolean }
-  | { type: 'ellipsis' };
+// `PaginationPageItem` removed 2026-05-04 (Phase 4.1b — URL-driven server
+// pagination via `$lib/utils/url-pagination` + `apiFetchPaginatedWithPermission`
+// renders all page-buttons without ellipsis, mirroring the manage-dummies
+// reference impl). See `./utils.ts` PAGINATION block for full context.
