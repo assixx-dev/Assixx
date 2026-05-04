@@ -358,7 +358,7 @@ GRANT USAGE, SELECT ON SEQUENCE user_push_tokens_id_seq TO sys_user;
 - [ ] `pg_dump` backup created before applying migration (per HARD BLOCK rule 1)
 - [ ] `doppler run -- ./scripts/run-migrations.sh up --dry-run` passes before real run
 - [ ] RLS verified post-migration: `SELECT tablename, policyname FROM pg_policies WHERE
-    tablename = 'user_push_tokens';` — `tenant_isolation` policy present
+  tablename = 'user_push_tokens';` — `tenant_isolation` policy present
 - [ ] `app_user` GRANTs verified: `\dp user_push_tokens` shows `arwd/assixx_user` for app_user
 - [ ] Customer fresh-install synced: `./scripts/sync-customer-migrations.sh`
 

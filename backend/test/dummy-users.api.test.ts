@@ -119,7 +119,14 @@ describe('Dummy Users: Create', () => {
 // ---- seq: 3 -- CRUD: List Dummies -------------------------------------------
 
 describe('Dummy Users: List', () => {
-  it('should return 200 with items array', async () => {
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.1 (2026-05-04): GET /dummy-users
+  // now ships the canonical ADR-007 envelope `{ success, data: T[], meta:
+  // { pagination: { page, limit, total, totalPages } }, timestamp }`. The
+  // ResponseInterceptor extracts the service's `items[]` into `data` and
+  // forwards `pagination` verbatim into `meta.pagination`. The frontend
+  // `apiFetchPaginated<T>` helper rejects anything else (Phase-2 contract,
+  // masterplan changelog 1.4.0).
+  it('should return 200 with canonical ADR-007 envelope', async () => {
     const res = await fetch(`${BASE_URL}/dummy-users`, {
       headers: authOnly(adminAuth.authToken),
     });
@@ -127,8 +134,13 @@ describe('Dummy Users: List', () => {
 
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(Array.isArray(body.data.items)).toBe(true);
-    expect(body.data.total).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.data.length).toBeGreaterThanOrEqual(1);
+    expect(body.meta?.pagination).toBeDefined();
+    expect(typeof body.meta.pagination.page).toBe('number');
+    expect(typeof body.meta.pagination.limit).toBe('number');
+    expect(body.meta.pagination.total).toBeGreaterThanOrEqual(1);
+    expect(typeof body.meta.pagination.totalPages).toBe('number');
   });
 
   it('should only contain dummy users, not employees', async () => {
@@ -136,11 +148,33 @@ describe('Dummy Users: List', () => {
       headers: authOnly(adminAuth.authToken),
     });
     const body = (await res.json()) as JsonBody;
-    const items = body.data.items as Array<{ email: string }>;
+    const items = body.data as Array<{ email: string }>;
 
     for (const item of items) {
       expect(item.email).toMatch(/dummy/i);
     }
+  });
+
+  // Plan §Step 3.1 mandate: verify `?page=2&limit=10` round-trips correctly
+  // and `meta.pagination.totalPages = ceil(total / limit)` (or 0 when total=0).
+  it('should echo ?page=2&limit=10 with correct totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/dummy-users?page=2&limit=10`, {
+      headers: authOnly(adminAuth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(10);
+    const { total, limit, totalPages } = body.meta.pagination as {
+      total: number;
+      limit: number;
+      totalPages: number;
+    };
+    const expectedTotalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    expect(totalPages).toBe(expectedTotalPages);
   });
 });
 

@@ -185,8 +185,8 @@ export class DummyUsersService {
 
   async list(tenantId: number, query: ListQuery): Promise<PaginatedDummyUsers> {
     const page = query.page ?? 1;
-    const pageSize = query.limit ?? 20;
-    const offset = (page - 1) * pageSize;
+    const limit = query.limit ?? 20;
+    const offset = (page - 1) * limit;
 
     const { conditions, params, nextIdx } = buildListWhere(tenantId, query);
     const whereClause = conditions.join(' AND ');
@@ -205,14 +205,17 @@ export class DummyUsersService {
        ${DUMMY_GROUP_BY}
        ORDER BY u.display_name ASC
        LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`,
-      [...params, pageSize, offset],
+      [...params, limit, offset],
     );
+
+    // Canonical ADR-007 pagination envelope (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.1).
+    // `totalPages = 0` when there are no rows — keeps the FE empty-state branch (`total === 0`)
+    // and the page-bounds derivation (`hasNext = page < totalPages`) consistent.
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
 
     return {
       items: rows.map(mapDummyUserRowToApi),
-      total,
-      page,
-      pageSize,
+      pagination: { page, limit, total, totalPages },
     };
   }
 

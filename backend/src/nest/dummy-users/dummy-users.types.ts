@@ -73,9 +73,29 @@ export interface DummyUser {
   areaNames: string[];
 }
 
+/**
+ * Paginated list response — canonical ADR-007 envelope (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.1).
+ *
+ * WHY this shape: the `ResponseInterceptor`
+ * (backend/src/nest/common/interceptors/response.interceptor.ts) recognises
+ * the combo `{ items[] | entries[] | data[], pagination }` as paginated and
+ * rewrites it to `{ success, data: items[], meta: { pagination }, timestamp }`.
+ * The frontend `apiFetchPaginated<T>` helper
+ * (frontend/src/lib/server/api-fetch.ts) requires `meta.pagination` to carry
+ * exactly `{ page, limit, total, totalPages }` (Phase-2 contract,
+ * masterplan changelog 1.4.0). Anything else falls through its defensive
+ * type-guard and yields an empty list.
+ *
+ * Replaces the legacy `{ items, total, page, pageSize }` shape (Phase-3
+ * rebuild, greenfield → no backwards-compat shim per CLAUDE.md
+ * §"Greenfield-Production").
+ */
 export interface PaginatedDummyUsers {
   items: DummyUser[];
-  total: number;
-  page: number;
-  pageSize: number;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
