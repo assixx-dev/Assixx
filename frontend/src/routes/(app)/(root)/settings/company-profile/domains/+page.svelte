@@ -260,7 +260,18 @@
     </div>
   </div>
 
-  {#if instructionsPanel !== null}
+  <!--
+    §0.2.5 #10: `verificationInstructions` are one-shot from POST /domains and
+    persist in `state-ui.instructionsPanel` until the user clicks "Schließen".
+    Additionally hide the panel as soon as the corresponding row flips to
+    `verified` (or disappears entirely) — at that point the TXT record is
+    obsolete and the panel is just noise. Reactive on `data.domains` so the
+    `invalidateAll()` after a successful `verifyDomain` (see handleVerify) or
+    a cross-tab verification automatically dismisses the panel without an
+    extra imperative `hideInstructions()` call. `failed`/`expired` keep the
+    panel visible — the user still needs the TXT to retry. ADR-049 §5.1.
+  -->
+  {#if instructionsPanel !== null && domains.some((d) => d.id === instructionsPanel.id && d.status !== 'verified')}
     <VerifyInstructionsPanel
       domain={instructionsPanel.domain}
       instructions={instructionsPanel.instructions}
