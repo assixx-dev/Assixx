@@ -329,28 +329,53 @@ describe('KVP: List Suggestions', () => {
     expect(body.success).toBe(true);
   });
 
-  it('should return suggestions array', async () => {
+  // Phase 4.5a (2026-05-05): /kvp now ships canonical ADR-007 envelope.
+  // Pre-4.5a the service returned `{ suggestions, pagination: { currentPage, ... } }`,
+  // which ResponseInterceptor.isPaginatedResponse could NOT detect → no
+  // `meta.pagination` was ever emitted. Now the wrapper key is `items`, so the
+  // interceptor flattens to `{ data: KVPSuggestionResponse[], meta: { pagination: { page, limit, total, totalPages } } }`.
+  // Mirrors dummy-users.api.test.ts (Phase 3.1 reference impl).
+  it('should return canonical ADR-007 envelope (data array + meta.pagination)', async () => {
     const res = await fetch(`${BASE_URL}/kvp`, {
       headers: authOnly(auth.authToken),
     });
     const body = (await res.json()) as JsonBody;
 
-    expect(Array.isArray(body.data.suggestions)).toBe(true);
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta?.pagination).toBeDefined();
+    expect(typeof body.meta.pagination.page).toBe('number');
+    expect(typeof body.meta.pagination.limit).toBe('number');
+    expect(typeof body.meta.pagination.total).toBe('number');
+    expect(typeof body.meta.pagination.totalPages).toBe('number');
 
     // Store first existing suggestion ID for fallback after delete
-    if (body.data.suggestions.length > 0) {
-      _existingKvpId = body.data.suggestions[0].id;
+    if (body.data.length > 0) {
+      _existingKvpId = body.data[0].id;
     }
   });
 
-  it('should return pagination info', async () => {
-    const res = await fetch(`${BASE_URL}/kvp`, {
+  // Plan §Step 4.5a mandate (mirrors §Step 3.1 dummy-users): verify
+  // `?page=2&limit=10` round-trips and `totalPages = ceil(total/limit)` (or 0 when total=0).
+  it('should echo ?page=2&limit=10 with correct totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?page=2&limit=10`, {
       headers: authOnly(auth.authToken),
     });
     const body = (await res.json()) as JsonBody;
 
-    expect(body.data.pagination).toBeDefined();
-    expect(typeof body.data.pagination).toBe('object');
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(10);
+    const { total, limit, totalPages } = body.meta.pagination as {
+      total: number;
+      limit: number;
+      totalPages: number;
+    };
+    const expectedTotalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    expect(totalPages).toBe(expectedTotalPages);
   });
 });
 

@@ -28,7 +28,7 @@
   Accessibility:
     - role="dialog", aria-modal="false" (non-blocking by design).
     - aria-labelledby + aria-describedby on the dialog root.
-    - aria-label on each toggle input (no visible <label> text).
+    - aria-label on each toggle input (no visible label text).
     - Esc key not bound: a decision is required, no implicit close.
 
   @see frontend/src/lib/utils/cookie-consent.svelte.ts
@@ -41,10 +41,11 @@
 
   import { cookieConsent } from '$lib/utils/cookie-consent.svelte';
 
-  // Animation is CSS-only (see <style> below). Svelte's transition: directives
-  // would force `import { fly } from 'svelte/transition'` + easing, which the
-  // pnpm-flat type-resolver in this repo flags as a no-duplicates conflict
-  // with the base `svelte` import. CSS-keyframe also has zero JS runtime cost.
+  // Animation is CSS-only (see the style block below). Svelte's transition
+  // directives would force `import { fly } from 'svelte/transition'` + easing,
+  // which the pnpm-flat type-resolver in this repo flags as a no-duplicates
+  // conflict with the base `svelte` import. CSS keyframes also have zero JS
+  // runtime cost.
 
   let mode = $state<'compact' | 'settings'>('compact');
   let prefFunctional = $state(false);
@@ -231,7 +232,7 @@
    * z-index 9000: above app content, below blackboard fullscreen (9999).
    * `inset` shorthand pins the card to the bottom with side margins.
    * Dark/light parity comes from --main-bg + --color-text-primary swapping
-   * in variables-{light,dark}.css; we never hardcode colours.
+   * in variables-light.css / variables-dark.css; we never hardcode colours.
    */
   .cookie-banner {
     /* Pinned to bottom-right per design review. Mobile (<=640px) overrides

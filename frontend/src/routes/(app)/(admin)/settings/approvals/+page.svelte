@@ -134,7 +134,6 @@
   const isUserType = $derived(selectedType === 'user');
   const isPositionType = $derived(selectedType === 'position');
 
-  const isLeadType = $derived(selectedType !== 'user' && selectedType !== 'position');
   const showScopeControls = $derived(isUserType || isPositionType);
 
   const selectedPositionLabel = $derived.by(() => {
@@ -415,17 +414,40 @@
     </div>
 
     <div class="card__body">
-      {#if isLeadType}
+      <!-- Approver-Typ-spezifische Kurz-Erklärung. Eine Zeile pro Typ — User-Feedback
+           2026-05-05: vorherige Variante mit Plural-Labels war unleserlich. -->
+      {#if selectedType === 'team_lead'}
         <div class="alert alert--info mb-4">
           <i class="fas fa-info-circle mr-2"></i>
-          Alle Benutzer mit dieser Lead-Position werden automatisch Freigabe-Master für das gewählte Modul.
+          Geht an den <strong>{resolvePositionDisplay('team_lead', labels)}</strong> des Antragstellers.
+          Beispiel: Antrag aus Team „Montage" → Lead von „Montage".
+        </div>
+      {/if}
+      {#if selectedType === 'department_lead'}
+        <div class="alert alert--info mb-4">
+          <i class="fas fa-info-circle mr-2"></i>
+          Geht an den <strong>{resolvePositionDisplay('department_lead', labels)}</strong> des Antragstellers.
+          Beispiel: Antrag aus Abteilung „Logistik" → Lead von „Logistik".
+        </div>
+      {/if}
+      {#if selectedType === 'area_lead'}
+        <div class="alert alert--info mb-4">
+          <i class="fas fa-info-circle mr-2"></i>
+          Geht an den <strong>{resolvePositionDisplay('area_lead', labels)}</strong> des Antragstellers.
+          Beispiel: Antrag aus Bereich „Werk Süd" → Lead von „Werk Süd".
         </div>
       {/if}
       {#if isPositionType}
         <div class="alert alert--info mb-4">
           <i class="fas fa-info-circle mr-2"></i>
-          Alle Benutzer, denen diese Position zugewiesen ist, werden automatisch Freigabe-Master für das
-          gewählte Modul.
+          Geht an <strong>alle</strong> Benutzer mit der gewählten Position — egal wer den Antrag stellt.
+          Optional per Scope auf einzelne Bereiche/Abteilungen/Teams einschränken.
+        </div>
+      {/if}
+      {#if isUserType}
+        <div class="alert alert--info mb-4">
+          <i class="fas fa-info-circle mr-2"></i>
+          Geht immer an die <strong>hier gewählte Person</strong> — egal wer den Antrag stellt.
         </div>
       {/if}
 
@@ -809,7 +831,12 @@
                     <span class="config-item__user">— {cfg.approverUserName}</span>
                   {/if}
                   {#if cfg.approverPositionName !== null}
-                    <span class="config-item__user">— {cfg.approverPositionName}</span>
+                    <!-- ADR-034 V2.2: render system-position codes (area_lead, team_lead, …)
+                         via resolvePositionDisplay() so tenant-specific prefix labels
+                         (Bereichsleiter / Teamleiter / etc.) appear instead of the raw DB code. -->
+                    <span class="config-item__user"
+                      >— {resolvePositionDisplay(cfg.approverPositionName, labels)}</span
+                    >
                   {/if}
                   {#if cfg.scopeAreaIds === null && cfg.scopeDepartmentIds === null && cfg.scopeTeamIds === null}
                     <span class="badge badge--info badge--xs ml-2">Ganze Firma</span>

@@ -1,14 +1,22 @@
 <script lang="ts">
   /**
-   * KVP (Suggestions) - Page Component
+   * KVP (Suggestions) — Page Component (Phase 4.5b URL-driven state)
    * @module kvp/+page
    *
-   * Level 3 SSR: $derived for SSR data, invalidateAll() after mutations.
-   * Note: Uses hybrid approach with client-side filtering for filter changes.
+   * Mirrors the §4.1b `manage-employees` and §4.4b `manage-assets` reference
+   * impls per FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.5b. URL holds
+   * pagination + search + every filter — there is NO `$state` shadow of
+   * these. Mutations call `invalidateAll()` to retrigger the load on the
+   * same URL, so all filter params are preserved across mutations.
+   *
+   * `kvpState` is now read-only for `currentUser`, `categories`,
+   * `departments`, `statistics`, and modal/photo UI flags. The suggestions
+   * list is consumed directly from `data.suggestions` (no kvpState mirror).
+   * Filter state lives in the URL and is read from `data.*` props.
    */
   import { untrack } from 'svelte';
 
-  import { invalidateAll, goto } from '$app/navigation';
+  import { goto, invalidateAll } from '$app/navigation';
   import { resolve } from '$app/paths';
 
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
@@ -16,8 +24,8 @@
   import { showErrorAlert } from '$lib/utils';
   import { getApiClient } from '$lib/utils/api-client';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
-  import { fetchSuggestions } from './_lib/api';
   import KvpCreateModal from './_lib/KvpCreateModal.svelte';
   import KvpFilterBar from './_lib/KvpFilterBar.svelte';
   import KvpSuggestionCard from './_lib/KvpSuggestionCard.svelte';
@@ -27,10 +35,13 @@
   import type { CurrentUser } from './_lib/types';
 
   const log = createLogger('KvpPage');
+  void log;
   const apiClient = getApiClient();
 
   // =============================================================================
-  // SSR DATA - Level 3: $derived from props (single source of truth)
+  // SSR DATA — URL is the single source of truth for pagination + filter state.
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.5b: there is NO client `$state`
+  // shadow of these — every change goes through `goto()` → load re-run.
   // =============================================================================
 
   const { data }: { data: PageData } = $props();
@@ -38,16 +49,18 @@
   // Hierarchy labels from layout data inheritance
   const labels = $derived(data.hierarchyLabels);
 
-  // SSR data via $derived - updates when invalidateAll() is called
-  // PageData is always defined from $props(), and server guarantees array values
+  // SSR data via $derived — updates when invalidateAll() / goto() reruns load.
+  // `suggestions` already represents the current page slice (server-paginated).
+  const suggestions = $derived(data.suggestions);
+  const pagination = $derived(data.pagination);
   const ssrCategories = $derived(data.categories);
   const ssrDepartments = $derived(data.departments);
-  const ssrSuggestions = $derived(data.suggestions);
   const ssrStatistics = $derived(data.statistics);
   const ssrCurrentUser = $derived<CurrentUser | null>(data.currentUser);
   const ssrUserOrganizations = $derived(data.userOrganizations);
   const permissionDenied = $derived(data.permissionDenied);
   const showStats = $derived(data.showStats);
+
   // Hard-Gate flag (ADR-037 Amendment 2026-04-26 + Masterplan §3.4 v0.6.0):
   // when no KVP master is reachable for the user's org scope, the backend
   // refuses POST /kvp. Disable the create button instead of letting the user
@@ -68,25 +81,25 @@
   const masters = $derived(data.approvalConfig.masters);
   const masterNames = $derived(masters.map((m) => m.displayName).join(', '));
 
-  // Sync SSR data to state store (for UI components that depend on it)
-  // IMPORTANT: Use untrack to prevent infinite loop - setUser calls updateEffectiveRole
-  // which reads $state, creating a circular dependency
+  // Sync read-only SSR data to the state store. The suggestions list is no
+  // longer mirrored here (Phase 4.5b) — the page reads it directly from
+  // `data.suggestions` above. Filters likewise live in the URL, not in
+  // `kvpState`. We still seed user/categories/departments/statistics so the
+  // create-modal + KvpFilterBar dropdowns continue to work.
+  // IMPORTANT: Use untrack to prevent infinite loop — setUser calls
+  // updateEffectiveRole which reads $state, creating a circular dependency.
   $effect(() => {
-    // Read dependencies first (these are tracked)
     const user = ssrCurrentUser;
     const cats = ssrCategories;
     const deps = ssrDepartments;
-    const suggs = ssrSuggestions;
     const stats = ssrStatistics;
 
-    // Write without tracking to prevent circular dependency
     untrack(() => {
       if (user !== null) {
         kvpState.setUser(user);
       }
       kvpState.setCategories(cats);
       kvpState.setDepartments(deps);
-      kvpState.setSuggestions(suggs);
       if (stats !== null) {
         kvpState.setStatistics(stats);
       }
@@ -95,24 +108,75 @@
   });
 
   // ==========================================================================
-  // DATA LOADING
+  // URL HELPERS — single source of truth for page / search / every filter.
+  // `buildPaginatedHref` skips defaults (page=1 / search='' / null / 'all'),
+  // so canonical first-page URLs stay clean (`/kvp`).
   // ==========================================================================
 
-  async function loadSuggestionsData() {
-    try {
-      const suggestions = await fetchSuggestions(
-        kvpState.currentFilter,
-        kvpState.statusFilter,
-        kvpState.categoryFilter,
-        kvpState.departmentFilter,
-        kvpState.teamFilter,
-        kvpState.assetFilter,
-        kvpState.searchQuery,
-      );
-      kvpState.setSuggestions(suggestions);
-    } catch (err: unknown) {
-      log.error({ err }, 'Error loading suggestions');
-    }
+  const BASE_PATH = '/kvp';
+
+  /**
+   * Snapshot of all current filter values needed to build a sibling href.
+   * Centralised so `pageHref` and `navigateFilters` stay in sync — change
+   * the URL contract here once instead of in two places.
+   */
+  function currentFilterSnapshot(): Record<string, unknown> {
+    return {
+      search: data.search,
+      status: data.status === 'all' ? undefined : data.status,
+      orgLevel: data.orgLevel === 'all' ? undefined : data.orgLevel,
+      categoryId: data.categoryId ?? undefined,
+      customCategoryId: data.customCategoryId ?? undefined,
+      teamId: data.teamId ?? undefined,
+      mineOnly: data.mineOnly ? 'true' : undefined,
+    };
+  }
+
+  /**
+   * Build an href for a target page, preserving every active filter.
+   * `buildPaginatedHref` skips defaults (page=1 / search='' / undefined),
+   * so canonical first-page URLs stay clean.
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        ...currentFilterSnapshot(),
+      }),
+    );
+  }
+
+  /**
+   * Filter overrides applied on top of the current URL snapshot. Each key
+   * mirrors a backend query param verbatim (§D5 — no FE-side aliasing).
+   * Each value is either the URL-emittable form or `undefined` to clear the
+   * filter. Callers handle their own sentinel mapping (e.g. `'all'` → clear)
+   * so this module never branches on it — keeps `navigateFilters` trivial
+   * and complies with the `complexity` / `cognitive-complexity` budgets.
+   */
+  interface FilterOverrides {
+    search?: string;
+    status?: PageData['status'] | undefined;
+    orgLevel?: PageData['orgLevel'] | undefined;
+    categoryId?: number | undefined;
+    customCategoryId?: number | undefined;
+    teamId?: number | undefined;
+    mineOnly?: 'true' | undefined;
+  }
+
+  /**
+   * Navigate to a new filter combination. Page resets to 1 (default — not
+   * emitted into the URL). Each unspecified key inherits the current URL
+   * value via spread merge; explicit `undefined` clears the filter.
+   * `keepFocus: true` preserves the search input cursor on debounced
+   * navigation.
+   */
+  function navigateFilters(overrides: FilterOverrides): void {
+    const merged: Record<string, unknown> = {
+      ...currentFilterSnapshot(),
+      ...overrides,
+    };
+    void goto(resolve(buildPaginatedHref(BASE_PATH, merged)), { keepFocus: true });
   }
 
   // ==========================================================================
@@ -150,6 +214,11 @@
     kvpState.closeCreateModal();
   }
 
+  /**
+   * Retrigger SSR load on the SAME URL — preserves every active filter and
+   * the current `?page=N`. Mirror of the §4.4b `manage-assets` mutation
+   * pattern.
+   */
   async function handleModalSuccess(): Promise<void> {
     await invalidateAll();
   }
@@ -276,17 +345,25 @@
       </div>
 
       <div class="card-body">
-        <!-- Filter Bar -->
+        <!-- Filter Bar — every value comes from URL state via `data.*` props.
+             Callbacks emit `navigateFilters(...)` which goto()s the new URL
+             and triggers the SSR load. -->
         <KvpFilterBar
           userOrganizations={ssrUserOrganizations}
+          categories={ssrCategories}
           {labels}
-          onfilterchange={() => {
-            void loadSuggestionsData();
-          }}
+          search={data.search}
+          status={data.status}
+          orgLevel={data.orgLevel}
+          categoryId={data.categoryId}
+          customCategoryId={data.customCategoryId}
+          teamId={data.teamId}
+          mineOnly={data.mineOnly}
+          onnavigate={navigateFilters}
         />
 
         <!-- Suggestions Grid -->
-        {#if kvpState.suggestions.length === 0}
+        {#if suggestions.length === 0}
           <div class="empty-state">
             <div class="empty-state__icon">
               <i class="fas fa-inbox"></i>
@@ -300,7 +377,7 @@
           <div
             class="mt-6 grid grid-cols-1 gap-6 md:grid-cols-[repeat(auto-fill,minmax(350px,1fr))]"
           >
-            {#each kvpState.suggestions as suggestion (suggestion.id)}
+            {#each suggestions as suggestion (suggestion.id)}
               <KvpSuggestionCard
                 {suggestion}
                 {labels}
@@ -310,6 +387,75 @@
               />
             {/each}
           </div>
+        {/if}
+
+        <!-- Pagination — URL-driven, anchor-based for native back/forward + right-click support -->
+        {#if pagination.totalPages > 1}
+          <nav
+            class="pagination"
+            id="kvp-pagination"
+            aria-label="Seitennavigation"
+          >
+            {#if pagination.hasPrev}
+              <a
+                class="pagination__btn pagination__btn--prev"
+                href={pageHref(pagination.page - 1)}
+                rel="prev"
+              >
+                <i class="fas fa-chevron-left"></i> Zurück
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--prev"
+                disabled
+              >
+                <i class="fas fa-chevron-left"></i> Zurück
+              </button>
+            {/if}
+
+            <div class="pagination__pages">
+              {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
+                {#if page === pagination.page}
+                  <span
+                    class="pagination__page pagination__page--active"
+                    aria-current="page"
+                  >
+                    {page}
+                  </span>
+                {:else}
+                  <a
+                    class="pagination__page"
+                    href={pageHref(page)}
+                  >
+                    {page}
+                  </a>
+                {/if}
+              {/each}
+            </div>
+
+            <span class="pagination__info">
+              Seite {pagination.page} von {pagination.totalPages} ({pagination.total} Einträge)
+            </span>
+
+            {#if pagination.hasNext}
+              <a
+                class="pagination__btn pagination__btn--next"
+                href={pageHref(pagination.page + 1)}
+                rel="next"
+              >
+                Weiter <i class="fas fa-chevron-right"></i>
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--next"
+                disabled
+              >
+                Weiter <i class="fas fa-chevron-right"></i>
+              </button>
+            {/if}
+          </nav>
         {/if}
       </div>
     </div>

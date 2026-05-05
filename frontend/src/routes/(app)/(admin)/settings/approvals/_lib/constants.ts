@@ -1,4 +1,8 @@
-import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
+import {
+  DEFAULT_HIERARCHY_LABELS,
+  resolvePositionDisplay,
+  type HierarchyLabels,
+} from '$lib/types/hierarchy-labels';
 
 import type { ApprovalApproverType } from './types.js';
 
@@ -8,22 +12,34 @@ interface ApproverOption {
   icon: string;
 }
 
-/** Factory: Approver type options with dynamic hierarchy labels (ADR-034) */
+/**
+ * Factory: Approver type options with dynamic hierarchy labels.
+ *
+ * ADR-034 V3: Lead labels use the position-prefix compounds via
+ * resolvePositionDisplay() — "Teamleiter" / "Abteilungsleiter" /
+ * "Bereichsleiter" (with custom-prefix overrides honoured) — instead of
+ * the old "${plural} Lead" form ("Teams Lead", "Abteilungen Lead", …),
+ * which mixed German plurals with an English suffix.
+ */
 export function createApproverTypeOptions(
   labels: HierarchyLabels = DEFAULT_HIERARCHY_LABELS,
 ): ApproverOption[] {
   return [
     {
       value: 'team_lead',
-      label: `${labels.team} Lead`,
+      label: resolvePositionDisplay('team_lead', labels),
       icon: 'fa-user-friends',
     },
     {
       value: 'department_lead',
-      label: `${labels.department} Lead`,
+      label: resolvePositionDisplay('department_lead', labels),
       icon: 'fa-building',
     },
-    { value: 'area_lead', label: `${labels.area} Lead`, icon: 'fa-sitemap' },
+    {
+      value: 'area_lead',
+      label: resolvePositionDisplay('area_lead', labels),
+      icon: 'fa-sitemap',
+    },
     { value: 'user', label: 'Bestimmter Benutzer', icon: 'fa-user' },
     { value: 'position', label: 'Position', icon: 'fa-id-badge' },
   ];

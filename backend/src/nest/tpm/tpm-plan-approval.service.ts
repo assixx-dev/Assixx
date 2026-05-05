@@ -168,6 +168,12 @@ export class TpmPlanApprovalService implements OnModuleInit {
   // Event Handling
   // ==========================================================================
 
+  /**
+   * Process-lifetime eventBus subscription — registered once from
+   * `OnModuleInit` on this NestJS singleton service. No matching `.off()`
+   * needed; the listener lives for the Node process.
+   * AUDIT_MEMORY_LEAKS.md step 4 (2026-05-05).
+   */
   private subscribeToApprovalDecisions(): void {
     eventBus.on(
       'approval.decided',

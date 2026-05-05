@@ -148,7 +148,7 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
     is 1 after construction, 0 after `onModuleDestroy()`). Commit pending
     (`fix(audit): clear cleanup interval on module destroy`).
 
-### [ ] 4. Sibling `eventBus.on(...)` callers
+### [x] 4. Sibling `eventBus.on(...)` callers
 
 - **Scope**: `backend/src/**/*.ts` excluding the already-fixed
   `notifications.controller.ts`.
@@ -159,8 +159,27 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
 - **Grep**: `eventBus.on(` and `\.on\(['"]` in services / controllers.
 - **DoD**: Each match either has a matching `.off()` OR is documented as a
   singleton subscription with rationale.
+- **Outcome**: verified 2026-05-05 — no leaks, 4 doc comments added.
+  - 4 `eventBus.on()` callers, all SINGLETON_INIT (zero `eventBus.off()`
+    in the codebase, by design):
+    - `websocket.ts:124` `listenForReadReceipts()` — registered from
+      `ChatWebSocketServer` constructor (singleton).
+    - `tpm/tpm-plan-approval.service.ts:171` — `OnModuleInit` singleton.
+    - `kvp/kvp-approval.service.ts:239` — `OnModuleInit` singleton.
+    - `shifts/swap-approval-bridge.service.ts:89` — `OnModuleInit` singleton.
+      Added a JSDoc to each registration site documenting the
+      process-lifetime rationale (DoD compliance: "documented as singleton
+      subscription with rationale").
+  - ~20 non-`eventBus` `.on('event', …)` callers — all singleton-init
+    (`process.on('SIGTERM' …)` in main.ts + deletion-worker, `redis.on`
+    on Redis singletons, `pool.on('error')` on pg pool, `wss.on
+('connection')`) OR per-connection auto-GC'd (`ws.on('message'
+| 'close' | 'error' | 'pong')` — handlers die with the socket).
+  - 1 `.subscribe()` call: the already-fixed `notifications.controller.ts`
+    SSE pattern with `takeUntil(destroy$) + finalize()`.
+  - No code-behaviour fix this session; pure documentation additions.
 
-### [ ] 5. `setInterval` / long-lived `setTimeout`
+### [x] 5. `setInterval` / long-lived `setTimeout`
 
 - **Scope**: `backend/src/**/*.ts`
 - **Goal**: No "forever-ticking" timer retains closures past the relevant
@@ -170,8 +189,30 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
   in a lifecycle hook. Also flag `setTimeout(` whose handle is stored at
   module/instance scope (rare but real).
 - **DoD**: Every interval has documented teardown.
+- **Outcome**: verified 2026-05-05 — 2 `setInterval`, 7 production
+  `setTimeout`, 0 leaks. No code change this session.
+  - `websocket.ts:606` `this.heartbeatInterval` (30s WebSocket ping) →
+    cleared in `shutdown()` L629 (`clearInterval` + null), triggered from
+    `main.ts gracefulShutdown()`.
+  - `audit-request-filter.service.ts:38` `this.cleanupInterval` (5min
+    cache sweep) → cleared in `onModuleDestroy()` L53 plus
+    `recentLogs.clear()`. Already fixed in commit 3d5542291 (step 3
+    cross-finding).
+  - 7 production `setTimeout` (excluding 6 test files):
+    - Ephemeral Promise sleeps: `deletion-worker.ts:134`,
+      `email-service.ts:655` (1s grace before SMTP retry).
+    - AbortController fetch-timeouts cleared in `finally`:
+      `microsoft.provider.ts:245` (postForm), `microsoft.provider.ts:296`
+      (graphFetch).
+    - Self-clearing race timeouts (no handle captured, callback fires
+      and releases): `websocket.ts:644` (1s ws-close shutdown fallback,
+      bounded by `Promise.all`), `domain-verification.service.ts:81`
+      (`DNS_TIMEOUT_MS` race; `resolver.cancel()` in `finally` frees the
+      socket immediately, JS timer self-clears at deadline).
+  - Module/instance-scope `setTimeout` handle stores: 0 matches
+    (regex `(this\.\w+|^(let|const)\s+\w+(:[^=]+)?)\s*=\s*setTimeout`).
 
-### [ ] 6. `deletion-worker` process audit
+### [x] 6. `deletion-worker` process audit
 
 - **Scope**: `backend/src/workers/deletion-worker.ts` and its dependencies
   (port 3002, separate Node process).
@@ -180,8 +221,41 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
   orphan connections / listeners / timers.
 - **DoD**: Verified by `kill -TERM <pid>` against a running worker; process
   exits 0 within 30s; no warnings about open handles.
+- **Outcome**: verified 2026-05-05 — DoD met, 0 leaks, no code change.
+  SIGTERM → exit 0 in **0.45 s** (far under the 30 s budget), no
+  open-handle warnings.
+  - Static audit (worker scope, `backend/src/workers/`):
+    - 4 `process.on()` listeners (`SIGTERM`, `SIGINT`, `uncaughtException`,
+      `unhandledRejection`) — singleton-init, process-lifetime by design.
+    - 1 `setTimeout` (`deletion-worker.ts:134`) — ephemeral Promise sleep
+      inside `private async sleep(ms)`. Already covered by step 5.
+    - 0 caches, 0 `setInterval`, 0 `eventBus.on()` at worker scope.
+  - Module-graph audit (`DeletionWorkerModule` → `TenantDeletionModule`,
+    `DatabaseModule`, `ClsModule`, `AppConfigModule`, `ConfigModule`):
+    - `TenantDeletionService` — `private redisClient: Redis | null` lazy
+      init, registers `redisClient.on('error', …)`. Properly released via
+      `OnModuleDestroy` (line 54: `await this.redisClient.quit()`).
+    - `DatabaseModule` — pool closed via its own `OnModuleDestroy`
+      (live log: "Closing PostgreSQL connection pool... closed"). Out of
+      scope per masterplan §"Out of scope".
+  - Live SIGTERM verification (`docker stop -t 70 assixx-deletion-worker`,
+    `restart: unless-stopped` keeps it stopped after `docker stop`):
+    - Pre: status=running, host-pid=2463, uptime 2049 s, `/health` OK.
+    - Stop duration 0.45 s, ExitCode=0, OOMKilled=false, Error="".
+    - Shutdown log chain in order: "received SIGTERM" → "Closing
+      PostgreSQL connection pool…" → "pool closed" → "NestJS
+      application context closed" → "Deletion Worker shutdown complete".
+    - Restored via `docker-compose up -d deletion-worker`; `/health`
+      back to healthy.
+  - **Discipline observation (not a leak, no fix this session)**: the
+    health-check `http.createServer` (`deletion-worker.ts:110`) is never
+    explicitly closed in `shutdown()`. Masked by the trailing
+    `process.exit(0)` (hard-kill bypasses Node's event-loop drain), which
+    is why the live test showed 0 open-handle warnings. Closing the
+    local `const server` would be cleaner discipline; flagged for a
+    future polish PR. Current behaviour is correct.
 
-### [ ] 7. Frontend `addEventListener` cleanup
+### [x] 7. Frontend `addEventListener` cleanup
 
 - **Scope**: `frontend/src/**/*.{ts,svelte,svelte.ts}`
 - **Goal**: Every `addEventListener` on `window`, `document`, or a
@@ -191,6 +265,40 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
 - **DoD**: Every match traces to a removal path. Anonymous handlers
   (`addEventListener('x', () => …)`) are inherently un-removable; flag as
   bugs unless they live on an element that is itself short-lived.
+- **Outcome**: verified 2026-05-06 — 0 production leaks. 71 total
+  `addEventListener` matches categorised:
+  - **~30 inside `.svelte` `$effect()` blocks** — already verified clean
+    by step 1 (each effect returns its own cleanup).
+  - **4 long-lived targets, named-ref handler with explicit removal** —
+    `notification-sse.ts:212` (`window.beforeunload` paired with
+    `disconnect()` L305-307), `role-sync.svelte.ts:178`
+    (`window.storage` paired with `destroy()` L263-265),
+    `click-outside.ts:35` (`document.click` action returns its own
+    cleanup → consumed by `$effect`), `perf-logger.ts:107`
+    (`window.load` with `{ once: true }` self-clearing).
+  - **~32 local-target handlers** (DOM elements, AbortSignal, XHR,
+    confirm/cancel buttons inside throw-away modals) — auto-GC'd with
+    their target, no manual cleanup needed.
+  - **5 anonymous-handler sites on long-lived targets** — flagged by
+    DoD's literal rule, but all live inside enforced singletons that
+    only attach the listener once per page load: - `session-manager.ts:71` (`document.visibilitychange`), - `session-manager.ts:96` (`document.scroll`, passive), - `session-manager.ts:108` (`document.{mousedown,keydown,touchstart,
+click}`, passive) — SessionManager singleton (lines 22, 54-62). - `token-manager.ts:688` (`document.visibilitychange`) — TokenManager
+    singleton (lines 112, 140-148). - `tooltip.svelte.ts:202+205` (`window.{blur,keydown}`) —
+    module-scope `isInitialized` flag (line 75) gates exactly-once.
+    Production behaviour: each listener attaches once, dies with
+    `beforeunload`. No compounding leak. Same singleton-init pattern as
+    backend `eventBus.on()` callers (step 4 precedent).
+  - **Code change this session**: 4 JSDoc additions documenting the
+    singleton-lifetime rationale at each site (matches step 4's
+    "documented as singleton subscription" approach):
+    - `session-manager.ts` — JSDoc on `setupPageVisibilityListener()`
+      and `setupActivityListeners()`.
+    - `token-manager.ts` — JSDoc on `setupVisibilityListener()`.
+    - `tooltip.svelte.ts` — expanded JSDoc on `initializeListeners()`.
+      Each comment cross-references this audit and notes the refactor
+      path (anonymous arrow → bound method) to take if future
+      requirements demand a `destroy()` API or HMR-dev hygiene.
+  - No behavioural change. Lint + type-check verified post-edit.
 
 ---
 

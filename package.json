@@ -10,7 +10,7 @@
     "npm": "please-use-pnpm",
     "yarn": "please-use-pnpm"
   },
-  "packageManager": "pnpm@10.33.2",
+  "packageManager": "pnpm@10.33.3",
   "pnpm": {
     "onlyBuiltDependencies": [],
     "overrides": {

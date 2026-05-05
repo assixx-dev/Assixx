@@ -682,6 +682,22 @@ export class TokenManager {
     window.location.replace(url);
   }
 
+  /**
+   * Subscribe to tab visibility transitions so the countdown re-syncs the
+   * moment the user returns from a background tab — otherwise the next
+   * `tick()` could mis-display elapsed time by up to one interval.
+   *
+   * SINGLETON-INIT LISTENER (no cleanup path): TokenManager is enforced
+   * as a process-lifetime singleton (lines 112 + 140-148: `static
+   * instance` + `getInstance()` factory). The anonymous-arrow handler
+   * fires exactly once per page load and dies with `beforeunload`. No
+   * compounding leak in production. Same rationale as the SessionManager
+   * listeners and the backend `eventBus.on()` singletons
+   * (AUDIT_MEMORY_LEAKS.md step 4 precedent).
+   *
+   * @see AUDIT_MEMORY_LEAKS.md step 7 (2026-05-06) — frontend listener audit
+   * @see ADR-005 — authentication strategy (token lifecycle context)
+   */
   private setupVisibilityListener(): void {
     if (!isBrowser()) return;
 

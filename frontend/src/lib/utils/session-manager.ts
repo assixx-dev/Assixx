@@ -62,8 +62,21 @@ export class SessionManager {
   }
 
   /**
-   * Setup Page Visibility API listener for battery optimization
-   * Pauses checks when tab is hidden, resumes when visible
+   * Setup Page Visibility API listener for battery optimization.
+   * Pauses checks when tab is hidden, resumes when visible.
+   *
+   * SINGLETON-INIT LISTENER (no cleanup path): SessionManager is enforced
+   * as a process-lifetime singleton via the `static instance` + factory
+   * pattern (lines 22, 54-62), so this anonymous-arrow `visibilitychange`
+   * listener fires exactly once per page load and dies with `beforeunload`.
+   * Production has zero compounding-leak risk. Same rationale as the
+   * backend `eventBus.on()` singletons (AUDIT_MEMORY_LEAKS.md step 4).
+   *
+   * If a future requirement needs `destroy()` to detach this listener
+   * (e.g. multi-instance test isolation, HMR-dev-mode hygiene), refactor
+   * to a bound method property so the reference becomes removable.
+   *
+   * @see AUDIT_MEMORY_LEAKS.md step 7 (2026-05-06) — frontend listener audit
    */
   private setupPageVisibilityListener(): void {
     if (!isBrowser()) return;
@@ -82,6 +95,19 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Attach global activity-tracking listeners on `document` for passive
+   * (scroll) and active (mousedown/keydown/touchstart/click) interactions.
+   *
+   * SINGLETON-INIT LISTENERS (no cleanup path): see
+   * `setupPageVisibilityListener()` JSDoc above for the singleton-lifetime
+   * rationale. The anonymous-arrow handlers passed to `forEach` are
+   * intentional — `document` lives for the page lifetime and the
+   * SessionManager singleton invariant prevents duplicate attachment.
+   * No compounding leak in production.
+   *
+   * @see AUDIT_MEMORY_LEAKS.md step 7 (2026-05-06)
+   */
   private setupActivityListeners(): void {
     if (!isBrowser()) return;
 

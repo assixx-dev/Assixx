@@ -322,8 +322,16 @@ export class KvpService {
   /** Execute count query by stripping confirmation JOIN and adjusting placeholders */
   private async executeCountQuery(query: string, params: unknown[]): Promise<number> {
     const { countQuery, countParams } = buildCountQuery(query, params);
-    const countRows = await this.db.tenantQuery<{ total: number }>(countQuery, countParams);
-    return countRows[0]?.total ?? 0;
+    // pg returns COUNT(*) bigint as string — coerce to number (mirrors line 250
+    // pattern in getDashboardStats). Pre-Phase-4.5a this drift was masked because
+    // the broken envelope never surfaced `meta.pagination.total` to the FE; the
+    // new canonical envelope test (kvp.api.test.ts §"canonical ADR-007 envelope")
+    // now enforces `typeof total === 'number'`.
+    const countRows = await this.db.tenantQuery<{ total: string | number }>(
+      countQuery,
+      countParams,
+    );
+    return Number(countRows[0]?.total ?? 0);
   }
 
   /** Get suggestion by ID (numeric or UUID) */

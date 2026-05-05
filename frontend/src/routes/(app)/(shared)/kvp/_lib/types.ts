@@ -31,19 +31,6 @@ export type KvpPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type OrgLevel = 'company' | 'department' | 'area' | 'team' | 'asset';
 
 /**
- * Filter types for KVP list
- */
-export type KvpFilter =
-  | 'all'
-  | 'mine'
-  | 'team'
-  | 'asset'
-  | 'department'
-  | 'company'
-  | 'manage'
-  | 'archived';
-
-/**
  * Current user
  */
 export interface User {
@@ -202,37 +189,20 @@ export interface UserTeamWithAssets {
 }
 
 /**
- * Badge counts for filter toggle
- */
-export interface BadgeCounts {
-  all: number;
-  mine: number;
-  team: number;
-  asset: number;
-  department: number;
-  company: number;
-  manage: number;
-  archived: number;
-}
-
-/**
- * API pagination response
+ * API pagination response — generic envelope for endpoints that return
+ * `{ data, pagination }`. Used by `loadDepartments` / `loadTeams` in
+ * `_lib/api.ts` (single-page consumers; not the suggestions list which
+ * uses the canonical ADR-007 envelope via `apiFetchPaginatedWithPermission`
+ * — see Phase 4.5b §D6).
+ *
+ * `BadgeCounts` + `SuggestionsResponse` types removed in Phase 4.5b
+ * (masterplan §D9 + Q2 Option C / Q3 sign-off): badge counts were always
+ * meaningless (counted only the loaded subset, not the full result set);
+ * `SuggestionsResponse` was the legacy non-canonical wrapper replaced by
+ * the ADR-007 `meta.pagination` envelope in Step 4.5a.
  */
 export interface PaginatedResponse<T> {
   data: T[];
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
-}
-
-/**
- * Suggestions API response
- */
-export interface SuggestionsResponse {
-  suggestions: KvpSuggestion[];
   pagination?: {
     page: number;
     limit: number;

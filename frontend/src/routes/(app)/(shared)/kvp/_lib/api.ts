@@ -11,15 +11,12 @@ import { API_ENDPOINTS } from './constants';
 
 import type {
   User,
-  KvpSuggestion,
   KvpCategory,
   Department,
   Team,
   KvpStats,
   KvpFormData,
-  SuggestionsResponse,
   PaginatedResponse,
-  KvpFilter,
   UserTeamWithAssets,
   ParticipantOptions,
 } from './types';
@@ -97,94 +94,15 @@ export async function loadTeams(): Promise<Team[]> {
 
 // =============================================================================
 // SUGGESTIONS
+//
+// Phase 4.5b (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.5b): the
+// `fetchSuggestions` client-side helper + its `buildSuggestionParams` /
+// `appendCategoryParam` companions were removed. The suggestions list is
+// now fetched server-side in `+page.server.ts` via
+// `apiFetchPaginatedWithPermission<KvpSuggestion>` (D6) — every filter is
+// URL-driven and the SSR load reruns on `goto()` / `invalidateAll()`. This
+// section retains only mutation helpers (create / share / unshare / upload).
 // =============================================================================
-
-/** Parse a source:id category filter value into params */
-function appendCategoryParam(params: URLSearchParams, value: string): void {
-  if (value === '') return;
-
-  if (!value.includes(':')) {
-    params.append('categoryId', value);
-    return;
-  }
-
-  const [source, id] = value.split(':');
-  const key = source === 'custom' ? 'customCategoryId' : 'categoryId';
-  params.append(key, id);
-}
-
-/**
- * Build query params for suggestions API
- * Maps frontend filter values to backend API parameters
- */
-function buildSuggestionParams(
-  filter: KvpFilter,
-  statusFilter: string,
-  categoryFilter: string,
-  departmentFilter: string,
-  teamFilter: string,
-  assetFilter: string,
-  searchQuery: string,
-): URLSearchParams {
-  const params = new URLSearchParams();
-
-  // Map filter to backend orgLevel parameter
-  const orgLevelFilters = ['team', 'asset', 'department', 'area', 'company'];
-  if (orgLevelFilters.includes(filter)) {
-    params.append('orgLevel', filter);
-  }
-
-  if (filter === 'mine') {
-    params.append('mineOnly', 'true');
-  }
-
-  if (filter === 'archived') {
-    params.append('status', 'archived');
-  } else if (statusFilter !== '') {
-    params.append('status', statusFilter);
-  }
-
-  appendCategoryParam(params, categoryFilter);
-  if (departmentFilter !== '') params.append('departmentId', departmentFilter);
-  if (teamFilter !== '') params.append('teamId', teamFilter);
-  if (assetFilter !== '') params.append('assetId', assetFilter);
-  if (searchQuery !== '') params.append('search', searchQuery);
-
-  return params;
-}
-
-/**
- * Fetch suggestions with filters
- */
-export async function fetchSuggestions(
-  filter: KvpFilter,
-  statusFilter: string,
-  categoryFilter: string,
-  departmentFilter: string,
-  teamFilter: string,
-  assetFilter: string,
-  searchQuery: string,
-): Promise<KvpSuggestion[]> {
-  try {
-    const params = buildSuggestionParams(
-      filter,
-      statusFilter,
-      categoryFilter,
-      departmentFilter,
-      teamFilter,
-      assetFilter,
-      searchQuery,
-    );
-
-    const response = await apiClient.get<SuggestionsResponse>(`${API_ENDPOINTS.KVP}?${params}`);
-
-    return response.suggestions;
-  } catch (err: unknown) {
-    log.error({ err }, 'Error fetching suggestions');
-    checkSessionExpired(err);
-    throw err;
-  }
-}
 
 /**
  * Create new suggestion

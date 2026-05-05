@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # pnpm AND npm parameterised — versions configurable via docker-compose
 # build args / docker/.env (Single Source of Truth).
 # See ADR-027 §"Amendment 2026-04-27" (npm parameterisation).
-ARG PNPM_VERSION=10.33.2
+ARG PNPM_VERSION=10.33.3
 ARG NPM_VERSION=11.13.0
 RUN npm install -g "npm@${NPM_VERSION}" "pnpm@${PNPM_VERSION}"
 
