@@ -694,7 +694,6 @@
   }
 
   .zoom-controls-inline {
-    backdrop-filter: none;
     margin: 0;
     background: transparent;
     padding: 0;

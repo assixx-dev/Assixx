@@ -64,7 +64,6 @@
 
   .subdomain-input {
     flex: 1;
-    backdrop-filter: var(--glass-form-backdrop);
     transition: var(--form-field-transition), var(--form-field-transition-shadow);
     border: var(--form-field-border);
     border-right: none;
@@ -95,7 +94,6 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    backdrop-filter: blur(5px);
     transition: all 0.2s ease;
     border: var(--form-field-border);
     border-left: none;

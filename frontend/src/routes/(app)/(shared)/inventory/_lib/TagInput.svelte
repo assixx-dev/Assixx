@@ -222,7 +222,6 @@
     gap: 0.375rem;
     align-items: center;
     width: 100%;
-    backdrop-filter: var(--glass-form-backdrop);
     transition: var(--form-field-transition), var(--form-field-transition-shadow);
     border: var(--form-field-border);
     border-radius: var(--form-field-radius);

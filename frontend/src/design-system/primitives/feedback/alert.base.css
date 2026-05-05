@@ -16,7 +16,6 @@
   position: relative;
   align-items: flex-start;
   gap: var(--spacing-3);
-  backdrop-filter: blur(10px);
 
   /* Transition */
   transition:

@@ -30,7 +30,6 @@
   position: relative;
   align-items: flex-start;
   gap: var(--spacing-4);
-  backdrop-filter: blur(10px);
 
   /* Transition for hover effects */
   transition:

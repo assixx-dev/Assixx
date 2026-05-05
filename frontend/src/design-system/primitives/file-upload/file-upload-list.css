@@ -70,7 +70,6 @@
     'preview progress progress progress';
   align-items: center;
   gap: var(--spacing-3);
-  backdrop-filter: blur(10px);
 
   /* Transition */
   transition:

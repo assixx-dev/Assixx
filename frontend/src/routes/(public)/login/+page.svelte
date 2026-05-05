@@ -723,7 +723,6 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    backdrop-filter: blur(10px);
     cursor: pointer;
     box-shadow: var(--glass-card-shadow);
     border: var(--glass-border);

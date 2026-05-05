@@ -20,7 +20,6 @@
 .progress {
   /* Layout */
   position: relative;
-  backdrop-filter: blur(10px);
 
   /* Appearance */
   border: 1px solid var(--color-glass-border);

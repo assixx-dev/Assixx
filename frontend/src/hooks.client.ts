@@ -2,7 +2,6 @@
  * SvelteKit Client Hooks - Sentry Error Tracking
  *
  * Initializes Sentry on the client side for browser error tracking.
- * Replay + Feedback are lazy-loaded to reduce initial bundle (~500 KiB savings on login).
  *
  * Note: DSN is hardcoded because it's public (only allows event submission).
  * This also avoids TypeScript issues with $env/static/public during tsc checks.
@@ -18,18 +17,11 @@ import { createLogger } from '$lib/utils/logger';
 
 const log = createLogger('Sentry');
 
-// DSN is public - hardcoding is the recommended approach per Sentry docs
+// DSN is public - hardcoding is the recommended approach per Sentry docs.
+// Region: ingest.de.sentry.io → EU/Frankfurt data residency (GDPR-relevant).
 // See: https://docs.sentry.io/concepts/key-terms/dsn-explainer/
 const SENTRY_DSN =
   'https://afe0f8b38a0c3cc9c09d40f90743766a@o4510697769730048.ingest.de.sentry.io/4510697927802960';
-
-// Public pages where Replay/Feedback are unnecessary (no authenticated user session).
-// Adding /roadmap here saves ~500 KiB on a marketing-only page that anonymous
-// visitors hit before signup. Disclaimer/Impressum/Datenschutz could follow
-// the same logic but are out of scope for this change.
-const isPublicPage =
-  typeof window !== 'undefined' &&
-  ['/login', '/signup', '/', '/roadmap'].some((p) => window.location.pathname === p);
 
 Sentry.init({
   dsn: SENTRY_DSN,
@@ -49,39 +41,35 @@ Sentry.init({
   // Prod: 10% sample rate
   tracesSampleRate: dev ? 0 : 0.1,
 
-  // Session Replay — disabled on public pages (login, signup, landing)
-  // Saves ~500 KiB unused JS on first page load
-  replaysSessionSampleRate: dev || isPublicPage ? 0 : 0.1,
-  replaysOnErrorSampleRate: isPublicPage ? 0 : 1.0,
+  // Session Replay: deliberately DISABLED everywhere.
+  // Reason 1 (legal): TTDSG §25 + Art. 6/13 DSGVO would require an opt-in
+  // consent banner, an explicit Sentry mention in the Datenschutzerklärung
+  // (frontend/src/routes/datenschutz/+page.svelte today states "kein
+  // nutzerbezogenes Tracking"), and a signed AVV with Functional Software Inc.
+  // We have decided not to introduce a consent banner — therefore Replay
+  // cannot be enabled, now or later, without revisiting that decision.
+  // Reason 2 (perf): rrweb instruments setTimeout / addEventListener /
+  // MutationObserver continuously even at low sample rates → measurable
+  // overhead, especially in dev where it polluted flame graphs.
+  // Error capture (handleErrorWithSentry below) is UNAFFECTED — Stack-Traces,
+  // Breadcrumbs and unhandled rejections still flow to Sentry under the
+  // legitimate-interest basis (Art. 6(1)(f)).
+  replaysSessionSampleRate: 0,
+  replaysOnErrorSampleRate: 0,
 
   // Integrations
-  // Dev: BrowserTracing patches window.fetch + history.pushState which triggers
-  // SvelteKit dev-mode warnings. Since tracesSampleRate: 0 in dev, tracing
-  // collects nothing anyway — remove the integration to avoid noise.
-  // Public pages: skip Replay integration entirely (~500 KiB bundle reduction)
-  integrations: (defaultIntegrations) => {
-    const base =
-      dev ? defaultIntegrations.filter((i) => i.name !== 'BrowserTracing') : defaultIntegrations;
-
-    // On public pages, don't load Replay at all — core error tracking only
-    if (isPublicPage) {
-      return base;
-    }
-
-    return [
-      ...base,
-      Sentry.replayIntegration({
-        // Privacy: mask text and block media in production
-        // Dev: relaxed for easier debugging
-        maskAllText: !dev,
-        blockAllMedia: !dev,
-      }),
-    ];
-  },
+  // - Dev: BrowserTracing patches window.fetch + history.pushState which
+  //   triggers SvelteKit dev-mode warnings. tracesSampleRate is 0 in dev
+  //   anyway, so remove the integration entirely to silence the noise.
+  // - Replay: never installed (see Session Replay block above). Not adding
+  //   the integration is the only way to keep rrweb's wrappers off the page;
+  //   sample rate 0 alone does not unhook them once the integration runs.
+  integrations: (defaultIntegrations) =>
+    dev ? defaultIntegrations.filter((i) => i.name !== 'BrowserTracing') : defaultIntegrations,
 });
 
 if (dev) {
-  log.info(`Frontend client initialized (replay: ${isPublicPage ? 'off' : 'on'})`);
+  log.info('Frontend client initialized (replay: off, tracing: off)');
 }
 
 /**

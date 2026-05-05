@@ -42,7 +42,6 @@
 }
 
 html.dark .confirm-modal {
-  backdrop-filter: blur(10px);
   box-shadow: 0 20px 60px oklch(0% 0 0);
   border-color: color-mix(in oklch, var(--color-white) 5%, transparent);
   background-image: linear-gradient(

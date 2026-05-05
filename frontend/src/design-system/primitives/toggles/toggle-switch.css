@@ -72,7 +72,6 @@
   /* Layout - iOS standard dimensions */
   position: relative;
   flex-shrink: 0;
-  backdrop-filter: blur(10px);
 
   /* Smooth transitions */
   transition:

@@ -393,7 +393,6 @@
 
   .message-content {
     position: relative;
-    backdrop-filter: blur(10px);
     border: 1px solid var(--color-glass-border-hover);
     border-radius: var(--radius-xl);
     background: var(--glass-bg-active);
@@ -459,7 +458,6 @@
   }
 
   .date-separator span {
-    backdrop-filter: blur(10px);
     border: var(--glass-border);
     border-radius: 20px;
     background: var(--accent-color);

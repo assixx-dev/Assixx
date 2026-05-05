@@ -28,22 +28,23 @@
  */
 
 /**
- * Build the subdomain-scoped handoff URL the browser should navigate to
- * after apex-login mint (Session 12c).
+ * Pure host-swap: derive the absolute origin of the user's tenant subdomain
+ * from the current request URL.
  *
  * Rules:
- *   - `localhost`                → `{slug}.localhost` (dev)
+ *   - `localhost`                     → `{slug}.localhost` (dev)
  *   - `assixx.com` / `www.assixx.com` → `{slug}.assixx.com` (prod apex)
- *   - subdomain already          → swap first label (cross-subdomain redirect)
+ *   - subdomain already               → swap first label (cross-subdomain redirect)
  *
- * Preserves protocol + port from the current request URL, so dev on
- * `:5173` stays on `:5173` and prod stays on 443.
+ * Preserves protocol + port from the current request URL, so dev on `:5173`
+ * stays on `:5173` and prod stays on 443.
  *
- * @param slug    Target tenant subdomain (e.g. `'assixx'`, `'firma-a'`).
- * @param token   Opaque 64-hex handoff token from `OAuthHandoffService.mint`.
- * @param request The incoming SvelteKit `Request` — only `request.url` is read.
+ * Internal helper — shared between {@link buildSubdomainHandoffUrl} (handoff
+ * token branch) and {@link buildSubdomainRootUrl} (apex remember-last-tenant
+ * branch, ADR-050 followup 2026-05-05). DRY: both consumers need the exact
+ * same host-swap; diverging copies would silently break dev/prod parity.
  */
-export function buildSubdomainHandoffUrl(slug: string, token: string, request: Request): string {
+function deriveSubdomainOrigin(slug: string, request: Request): string {
   const url = new URL(request.url);
   const hostname = url.hostname;
 
@@ -60,5 +61,59 @@ export function buildSubdomainHandoffUrl(slug: string, token: string, request: R
   }
 
   const port = url.port ? `:${url.port}` : '';
-  return `${url.protocol}//${newHost}${port}/signup/oauth-complete?token=${encodeURIComponent(token)}`;
+  return `${url.protocol}//${newHost}${port}`;
+}
+
+/**
+ * Build the subdomain-scoped handoff URL the browser should navigate to
+ * after apex-login mint (Session 12c).
+ *
+ * @param slug    Target tenant subdomain (e.g. `'assixx'`, `'firma-a'`).
+ * @param token   Opaque 64-hex handoff token from `OAuthHandoffService.mint`.
+ * @param request The incoming SvelteKit `Request` — only `request.url` is read.
+ */
+export function buildSubdomainHandoffUrl(slug: string, token: string, request: Request): string {
+  return `${deriveSubdomainOrigin(slug, request)}/signup/oauth-complete?token=${encodeURIComponent(token)}`;
+}
+
+/**
+ * Build the subdomain `/login` URL `<protocol>//<slug>.<apex>:<port>/login`
+ * for the "remember-last-tenant" UX redirect on apex login (ADR-050 followup
+ * 2026-05-05).
+ *
+ * Different from {@link buildSubdomainHandoffUrl}: this URL carries NO auth
+ * material — it relies on the user's existing subdomain-scoped session cookies
+ * (set by an earlier successful login on this browser) to satisfy the
+ * subdomain `/login` load function's auth probe. The probe (`/users/me` with
+ * the subdomain-scoped accessToken) decides:
+ *
+ *   - **valid session** → load throws `redirect(302, getRedirectPath(role))`
+ *     so the user lands on the role-specific dashboard (one extra server-side
+ *     hop, but role-aware which the apex side cannot be without holding auth).
+ *   - **invalid / expired session** → load clears stale cookies and renders
+ *     the credentials form on the subdomain. From the user's perspective
+ *     they are still on a subdomain `/login`, which is the same endpoint
+ *     they would have reached via apex anyway.
+ *
+ * Why `/login` and not `/` (subdomain root):
+ *
+ *   - `/` resolves to the public landing/marketing page, NOT a role-aware
+ *     dispatcher — it has no auth probe and therefore would not redirect
+ *     a logged-in user anywhere.
+ *   - `/login` already has the auth probe + role-based dashboard redirect
+ *     (`+page.server.ts::load` reads `accessToken` and calls `/users/me`).
+ *     Reusing it keeps the dispatch logic in ONE place instead of duplicating
+ *     it onto the root route.
+ *
+ * If the subdomain session is gone AND the form is then submitted, the apex
+ * hint cookie keeps pointing at the same tenant — the user is back where
+ * they wanted to be after re-auth. No loop, no stale-tenant trap.
+ *
+ * @param slug    Target tenant subdomain. Caller MUST validate against the
+ *                slug regex BEFORE passing — this function performs no
+ *                validation and would happily build a malformed URL.
+ * @param request The incoming SvelteKit `Request` — only `request.url` is read.
+ */
+export function buildSubdomainLoginUrl(slug: string, request: Request): string {
+  return `${deriveSubdomainOrigin(slug, request)}/login`;
 }

@@ -8,6 +8,12 @@
  * They define the visual language of the entire system
  */
 
+/* Self-hosted web fonts (Outfit) — MUST be first so @font-face is registered
+ * before any downstream token (typography weights, form labels) references it.
+ * Self-hosting required by DSGVO: LG München I 2022, see fonts.css header.
+ */
+@import './fonts.css';
+
 /* Semantic color mappings */
 @import './colors.css';
 

@@ -286,7 +286,6 @@
     display: flex;
     align-items: center;
     width: 100%;
-    backdrop-filter: blur(10px);
     transition:
       border-color var(--duration-fast) var(--ease-standard),
       background var(--duration-fast) var(--ease-standard),

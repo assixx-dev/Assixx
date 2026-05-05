@@ -443,7 +443,6 @@
     flex-direction: column;
     flex-shrink: 0;
     align-self: flex-start;
-    backdrop-filter: blur(20px);
     transition:
       width 0.1s ease,
       min-width 0.1s ease;
@@ -475,6 +474,7 @@
   }
 
   .sidebar-footer-area {
+    position: relative;
     flex-shrink: 0;
   }
 
@@ -754,7 +754,6 @@
 
   .sidebar :global(.nav-badge-surveys) {
     right: 15px;
-    backdrop-filter: blur(10px);
     border: 1px solid color-mix(in oklch, var(--color-warning) 30%, transparent);
     border-radius: 12px;
     background: color-mix(in oklch, var(--color-warning) 15%, transparent);
@@ -774,7 +773,6 @@
 
   .sidebar :global(.nav-badge-lean-parent) {
     right: 40px;
-    backdrop-filter: blur(10px);
     background: oklch(77.2% 0.1738 64.55 / 70%);
     color: var(--color-white);
     font-weight: 600;

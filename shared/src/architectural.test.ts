@@ -1162,3 +1162,75 @@ describe('Backend+Frontend: Tenant Subdomain Routing Invariants (ADR-050)', () =
     ).toEqual([]);
   });
 });
+
+describe('Frontend: Apex Last-Tenant Cookie Isolation (ADR-050 Followup 2026-05-05)', () => {
+  /**
+   * The `lastTenantSlug` cookie is the apex remember-last-tenant UX hint
+   * (ADR-050 §"Followup deferred: Remember-last-tenant-slug"). It MUST NOT
+   * leak into:
+   *
+   *   1. **The (app) layout server load** — would turn it into a de-facto
+   *      auth signal (the bug class that ADR-050 §"Cookies: Browser-Native
+   *      Isolation" forbids structurally).
+   *   2. **Any subdomain-scoped action/load** — the cookie is host-only on
+   *      the apex; reading it from a subdomain returns undefined and would
+   *      surface as "hint not working" with no clear root cause.
+   *   3. **Any client-side code** — a localStorage-backed "Recent
+   *      workspaces" UI is a future followup; it would belong in its own
+   *      module + test, NOT in scattered route files.
+   *
+   * Allowlist: the helper module owns the literal + the constant; the apex
+   * login server file consumes both via `setLastTenantSlug` /
+   * `getLastTenantSlug` / `clearLastTenantSlug` (no string literal); the
+   * 2FA verify helper sets the cookie via the same helper. The architectural
+   * test asserts the cookie-name STRING LITERAL appears only in the helper
+   * — every consumer must go through the helper API instead of typing
+   * `'lastTenantSlug'` directly.
+   */
+  const LAST_TENANT_COOKIE_OWNERS = new Set<string>([
+    'frontend/src/lib/server/last-tenant-cookie.ts',
+    // architectural.test.ts itself documents the literal in this describe
+    // block — exempt the test file so the meta-rule does not flag itself.
+    'shared/src/architectural.test.ts',
+  ]);
+
+  it("only last-tenant-cookie.ts owns the 'lastTenantSlug' string literal", () => {
+    // Match the bare cookie name as it would appear in a string literal
+    // (single or double quoted). Anchored on the surrounding quote chars
+    // so a substring inside a longer identifier (e.g. a hypothetical
+    // `getLastTenantSlugFromHeader`) does NOT match.
+    // `\x27` = `'`, used because grepFiles wraps the rg pattern in single
+    // quotes for the shell — same hex-escape pattern as the apex-login
+    // describe block above.
+    const tsMatches = grepFiles('[\\x22\\x27]lastTenantSlug[\\x22\\x27]', 'frontend/src', '*.ts');
+    const svelteMatches = grepFiles(
+      '[\\x22\\x27]lastTenantSlug[\\x22\\x27]',
+      'frontend/src',
+      '*.svelte',
+    );
+    const violations = [...tsMatches, ...svelteMatches].filter(
+      (f) => !LAST_TENANT_COOKIE_OWNERS.has(f),
+    );
+
+    expect(
+      violations,
+      `Found 'lastTenantSlug' string literal outside last-tenant-cookie.ts. The cookie name MUST flow through the helper API (setLastTenantSlug / getLastTenantSlug / clearLastTenantSlug) so a future rename is a single-file change AND so the apex-only invariant cannot be silently violated by a subdomain-scoped reader (ADR-050 §"Cookies: Browser-Native Isolation"):\n${violations.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  /**
+   * Defence against accidentally turning the hint into auth: the cookie
+   * MUST NOT be read inside any (app) layout/load file. Those run on the
+   * subdomain origin where the cookie is unreadable anyway, but a stray
+   * import would signal a future contributor was confused about the
+   * cookie's purpose. Belt-and-braces — the previous test catches the
+   * literal, this one catches the helper-API import in forbidden contexts.
+   */
+  it("(app) routes do not import last-tenant-cookie helpers (it's apex-only)", () => {
+    const matches = grepFiles('last-tenant-cookie', 'frontend/src/routes/(app)', '*.ts');
+    expect(
+      matches,
+      `Found 'last-tenant-cookie' import inside frontend/src/routes/(app)/**. The hint cookie is apex-host-only and unreadable from any subdomain origin; importing the helpers in (app) suggests the consumer thinks it is an auth signal (it is NOT — ADR-050 §"Followup: Remember-last-tenant-slug" is pure routing UX). Move the logic to (public)/login or delete the import:\n${matches.join('\n')}`,
+    ).toEqual([]);
+  });
+});

@@ -238,7 +238,6 @@
     display: flex;
     align-items: center;
     width: 100%;
-    backdrop-filter: blur(10px);
     transition:
       border-color var(--duration-fast) var(--ease-standard),
       background var(--duration-fast) var(--ease-standard),
@@ -325,7 +324,6 @@
 
   :global(.app-date-picker__content) {
     z-index: 2100;
-    backdrop-filter: blur(20px);
     background: color-mix(in oklch, var(--color-white) 95%, transparent);
     border: 1px solid var(--color-glass-border);
     border-radius: var(--radius-2xl);

@@ -145,7 +145,6 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--color-glass-border);
     background: var(--glass-bg-hover);
     padding: 7px 16px;

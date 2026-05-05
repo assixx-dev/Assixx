@@ -37,7 +37,6 @@
   border-radius: var(--radius-xl);
 
   background: var(--glass-bg);
-  backdrop-filter: blur(10px);
 
   transition: border-color 0.2s ease;
 }

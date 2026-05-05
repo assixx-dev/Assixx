@@ -673,7 +673,6 @@
     color: var(--color-text-primary);
     overflow-wrap: anywhere;
     background: var(--glass-bg);
-    backdrop-filter: var(--glass-backdrop);
     box-shadow: var(--glass-card-shadow);
   }
 

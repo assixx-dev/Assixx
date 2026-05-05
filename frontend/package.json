@@ -62,6 +62,8 @@
   "dependencies": {
     "@assixx/shared": "workspace:*",
     "@event-calendar/core": "^5.7.0",
+    "@fontsource-variable/outfit": "5.2.8",
+    "@fontsource/material-symbols-outlined": "5.2.43",
     "@internationalized/date": "3.12.1",
     "@noble/ciphers": "2.2.0",
     "@noble/curves": "2.2.0",

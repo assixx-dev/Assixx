@@ -33,7 +33,6 @@
 
 /* Header */
 .card-accent__header {
-  backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--color-glass-border);
   border-radius: 10px 10px 0 0;
 

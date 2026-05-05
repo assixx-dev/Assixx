@@ -797,7 +797,6 @@
   }
 
   .department-notice {
-    backdrop-filter: var(--glass-backdrop);
     margin: var(--spacing-8) auto;
 
     border: var(--glass-border);

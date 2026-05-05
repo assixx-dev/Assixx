@@ -47,7 +47,6 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    backdrop-filter: blur(10px);
     cursor: pointer;
     box-shadow:
       0 4px 12px color-mix(in oklch, var(--color-black) 20%, transparent),

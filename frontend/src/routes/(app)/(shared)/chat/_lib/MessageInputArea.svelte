@@ -146,7 +146,6 @@
   .message-input-container {
     position: relative;
     z-index: 10;
-    backdrop-filter: blur(10px);
     border-top: 1px solid var(--color-glass-border);
     padding: 10px 16px;
   }
@@ -242,7 +241,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--spacing-2);
-    backdrop-filter: blur(10px);
     margin-bottom: var(--spacing-2);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);

@@ -442,7 +442,6 @@
   }
 
   .favorites-container {
-    backdrop-filter: var(--glass-backdrop);
     margin-bottom: var(--spacing-6);
 
     border: var(--glass-border);

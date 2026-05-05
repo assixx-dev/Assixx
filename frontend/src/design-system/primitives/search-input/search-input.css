@@ -23,7 +23,6 @@
   position: relative;
   align-items: center;
   gap: var(--spacing-2);
-  backdrop-filter: blur(10px);
 
   transition: all var(--transition-normal);
 

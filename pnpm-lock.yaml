@@ -359,6 +359,12 @@ importers:
       '@event-calendar/core':
         specifier: ^5.7.0
         version: 5.7.0(@typescript-eslint/types@8.59.2)
+      '@fontsource-variable/outfit':
+        specifier: 5.2.8
+        version: 5.2.8
+      '@fontsource/material-symbols-outlined':
+        specifier: 5.2.43
+        version: 5.2.43
       '@internationalized/date':
         specifier: 3.12.1
         version: 3.12.1
@@ -1140,6 +1146,12 @@ packages:
 
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+
+  '@fontsource-variable/outfit@5.2.8':
+    resolution: {integrity: sha512-4oUDCZx/Tcz6HZP423w/niqEH31Gks5IsqHV2ZZz1qKHaVIZdj2f0/S1IK2n8jl6Xo0o3N+3RjNHlV9R73ozQA==}
+
+  '@fontsource/material-symbols-outlined@5.2.43':
+    resolution: {integrity: sha512-emBkCU4p7QjT/D3X0Jv0ZvL50ZwQpKqZichrXRdpcP9FJxqSFHnD/E8c4FJilazFEGtvJPx4mCZn8TiGA4AAag==}
 
   '@grpc/grpc-js@1.14.3':
     resolution: {integrity: sha512-Iq8QQQ/7X3Sac15oB6p0FmUg/klxQvXLeileoqrTRGJYLV+/9tubbr9ipz0GKHjmXVsgFPo/+W+2cA8eNcR+XA==}
@@ -7223,6 +7235,10 @@ snapshots:
       '@floating-ui/utils': 0.2.11
 
   '@floating-ui/utils@0.2.11': {}
+
+  '@fontsource-variable/outfit@5.2.8': {}
+
+  '@fontsource/material-symbols-outlined@5.2.43': {}
 
   '@grpc/grpc-js@1.14.3':
     dependencies:

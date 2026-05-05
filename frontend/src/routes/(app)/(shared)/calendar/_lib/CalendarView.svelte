@@ -405,7 +405,6 @@
 
     .calendar-fullscreen-mode #calendarContainer .card__header .btn {
       border: 1px solid color-mix(in oklch, var(--color-white) 10%, transparent);
-      backdrop-filter: blur(10px);
     }
 
     .calendar-fullscreen-mode #calendarContainer .card__header .btn:hover {

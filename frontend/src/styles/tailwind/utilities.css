@@ -103,19 +103,6 @@
     animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
 
-  /* Glassmorphism Utilities */
-  .glass-blur {
-    backdrop-filter: blur(20px);
-  }
-
-  .glass-blur-light {
-    backdrop-filter: blur(10px);
-  }
-
-  .glass-saturate {
-    backdrop-filter: saturate(180%);
-  }
-
   /* Grid Utilities */
   .grid-auto-fit {
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));

@@ -22,7 +22,6 @@
   border-radius: var(--radius-xl);
 
   /* ========== BACKGROUND ========== */
-  backdrop-filter: var(--blur-sm);
   background: oklch(57.71% 0.1893 27.23 / 4%); /* Red tint at 4% */
 
   /* ========== SPACING ========== */
