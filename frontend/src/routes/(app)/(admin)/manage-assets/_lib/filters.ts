@@ -1,49 +1,20 @@
 // =============================================================================
-// MANAGE MACHINES - FILTER FUNCTIONS (Pure Functions)
+// MANAGE ASSETS - FILTERS REMOVED (Phase 4.4b, 2026-05-05)
 // =============================================================================
+//
+// Pre-Phase-4.4b this module exported `filterByStatus`, `filterBySearch`,
+// and `applyAllFilters` for client-side filtering of `assetState.allAssets`
+// in `+page.svelte`. With server-driven pagination
+// (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.4b) every filter is forwarded
+// as a backend query param (`?status=…`, `?search=…`) and the backend
+// returns the page slice directly via the ADR-007 envelope.
+//
+// The file is intentionally kept (not deleted) as a redirect signpost in
+// case any future code attempts to re-import the helpers — TypeScript will
+// reject `applyAllFilters is not exported` cleanly. Safe to delete in a
+// follow-up housekeeping PR (Phase 5.2 cleanup).
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4b (Session 7d)
+// @see frontend/src/routes/(app)/(shared)/manage-employees/+page.server.ts (reference impl)
 
-import type { Asset, AssetStatusFilter } from './types';
-
-/** Filter assets by status */
-function filterByStatus(assets: Asset[], status: AssetStatusFilter): Asset[] {
-  if (status === 'all') {
-    return assets;
-  }
-  return assets.filter((asset) => asset.status === status);
-}
-
-/**
- * Filter assets by search query.
- * Searches in: name, model, manufacturer, department, serialNumber
- */
-export function filterBySearch(assets: Asset[], query: string): Asset[] {
-  const term = query.toLowerCase().trim();
-  if (term === '') return assets;
-
-  return assets.filter((asset) => {
-    const name = asset.name.toLowerCase();
-    const model = (asset.model ?? '').toLowerCase();
-    const manufacturer = (asset.manufacturer ?? '').toLowerCase();
-    const department = (asset.departmentName ?? '').toLowerCase();
-    const serialNumber = (asset.serialNumber ?? '').toLowerCase();
-
-    return (
-      name.includes(term) ||
-      model.includes(term) ||
-      manufacturer.includes(term) ||
-      department.includes(term) ||
-      serialNumber.includes(term)
-    );
-  });
-}
-
-/** Apply all filters in sequence */
-export function applyAllFilters(
-  assets: Asset[],
-  status: AssetStatusFilter,
-  searchQuery: string,
-): Asset[] {
-  let result = filterByStatus(assets, status);
-  result = filterBySearch(result, searchQuery);
-  return result;
-}
+export {};

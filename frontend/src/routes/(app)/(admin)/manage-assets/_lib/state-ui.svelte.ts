@@ -1,17 +1,19 @@
 // =============================================================================
-// MANAGE MACHINES - UI STATE MODULE
+// MANAGE ASSETS - UI STATE MODULE (modal/form lifecycle only)
 // =============================================================================
+//
+// Phase 4.4b (2026-05-05): `loading`, `error`, `currentStatusFilter`,
+// `currentSearchQuery`, `searchOpen` (and their setters) were removed.
+// Pagination, search, and status filter are URL-driven via the Phase-2
+// helpers (`readPageFromUrl` / `readSearchFromUrl` / `readFilterFromUrl`)
+// — there is NO `$state` shadow of these. `loading` was always `true` on
+// mount with no consumer flipping it back; `error` was checked in the
+// template but never set. Both were dead state.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4b
 
-import type { AssetStatusFilter } from './types';
-
-/** Creates UI-related state (loading, error, modals, filters) */
-// eslint-disable-next-line max-lines-per-function -- Svelte 5 state factory: all state vars must be in same function scope for reactivity
+/** Creates UI lifecycle state — modal open/close, edit/delete IDs, submit flag. */
 export function createUIState() {
-  let loading = $state(true);
-  let error = $state<string | null>(null);
-  let currentStatusFilter = $state<AssetStatusFilter>('all');
-  let currentSearchQuery = $state('');
-  let searchOpen = $state(false);
   let submitting = $state(false);
   let showAssetModal = $state(false);
   let showDeleteModal = $state(false);
@@ -19,21 +21,6 @@ export function createUIState() {
   let deleteAssetId = $state<number | null>(null);
 
   return {
-    get loading() {
-      return loading;
-    },
-    get error() {
-      return error;
-    },
-    get currentStatusFilter() {
-      return currentStatusFilter;
-    },
-    get currentSearchQuery() {
-      return currentSearchQuery;
-    },
-    get searchOpen() {
-      return searchOpen;
-    },
     get submitting() {
       return submitting;
     },
@@ -48,21 +35,6 @@ export function createUIState() {
     },
     get deleteAssetId() {
       return deleteAssetId;
-    },
-    setLoading: (v: boolean) => {
-      loading = v;
-    },
-    setError: (v: string | null) => {
-      error = v;
-    },
-    setCurrentStatusFilter: (v: AssetStatusFilter) => {
-      currentStatusFilter = v;
-    },
-    setCurrentSearchQuery: (v: string) => {
-      currentSearchQuery = v;
-    },
-    setSearchOpen: (v: boolean) => {
-      searchOpen = v;
     },
     setSubmitting: (v: boolean) => {
       submitting = v;

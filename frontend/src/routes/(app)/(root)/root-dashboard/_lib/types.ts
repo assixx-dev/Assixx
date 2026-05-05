@@ -5,6 +5,9 @@
 
 /** Dashboard statistics data */
 export interface DashboardData {
+  // Backend already returns rootCount (root.types.ts: RootDashboardData) — surfaced
+  // here so the dashboard can render a "Root" stat card alongside admins/employees.
+  rootCount: number;
   adminCount: number;
   employeeCount: number;
   totalUsers: number;

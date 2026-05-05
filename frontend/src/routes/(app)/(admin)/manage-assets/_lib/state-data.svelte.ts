@@ -1,29 +1,32 @@
 // =============================================================================
-// MANAGE MACHINES - DATA STATE MODULE
+// MANAGE ASSETS - DATA STATE MODULE (reference data only)
 // =============================================================================
+//
+// Phase 4.4b (2026-05-05): `allAssets` / `filteredAssets` (and their setters)
+// were removed. Server-driven pagination puts the asset page slice in
+// `+page.server.ts` → `data.assets` (PageData prop) — there is NO client
+// `$state` shadow of the asset list. Reference data (departments, areas,
+// teams, hierarchy labels) is still mirrored here because the form modal
+// (`AssetFormModal.svelte`) consumes it via `assetState.allAreas` etc.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4b
 
 import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
 
-import type { Asset, Department, Area, Team } from './types';
+import type { Department, Area, Team } from './types';
 
 /**
- * Creates data-related state (assets, departments, areas, teams, labels)
+ * Creates reference-data state (departments, areas, teams, labels) consumed
+ * by the form modal. The asset list itself is no longer mirrored here —
+ * pages read it directly from the SSR `data` prop.
  */
 export function createDataState() {
-  let allAssets = $state<Asset[]>([]);
-  let filteredAssets = $state<Asset[]>([]);
   let allDepartments = $state<Department[]>([]);
   let allAreas = $state<Area[]>([]);
   let allTeams = $state<Team[]>([]);
   let labels = $state(DEFAULT_HIERARCHY_LABELS);
 
   return {
-    get allAssets() {
-      return allAssets;
-    },
-    get filteredAssets() {
-      return filteredAssets;
-    },
     get allDepartments() {
       return allDepartments;
     },
@@ -35,12 +38,6 @@ export function createDataState() {
     },
     get labels() {
       return labels;
-    },
-    setAssets: (v: Asset[]) => {
-      allAssets = v;
-    },
-    setFilteredAssets: (v: Asset[]) => {
-      filteredAssets = v;
     },
     setDepartments: (v: Department[]) => {
       allDepartments = v;

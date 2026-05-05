@@ -96,14 +96,16 @@ const STATIC_MESSAGES = {
   BTN_RETRY: 'Erneut versuchen',
   BTN_ADD: 'Hinzufügen',
 
-  // Status filter buttons
+  // Status filter buttons — Phase 4.4b: aligned with backend `?status=`
+  // enum. `FILTER_CLEANING` / `FILTER_OTHER` removed (FE/BE drift, never
+  // produced matches); `FILTER_DECOMMISSIONED` added for the canonical
+  // end-of-life status.
   FILTER_ALL: 'Alle',
   FILTER_OPERATIONAL: 'Betriebsbereit',
   FILTER_MAINTENANCE: 'Wartung',
   FILTER_REPAIR: 'Reparatur',
   FILTER_STANDBY: 'Stillstand',
-  FILTER_CLEANING: 'Reinigung',
-  FILTER_OTHER: 'Sonstiges',
+  FILTER_DECOMMISSIONED: 'Außer Betrieb',
 
   // Search
   SEARCH_PLACEHOLDER: 'Name, Modell, Hersteller...',
@@ -166,15 +168,14 @@ export function createMessages(labels: HierarchyLabels) {
     // Search
     SEARCH_NO_RESULTS: `Keine ${labels.asset} gefunden`,
 
-    // Empty state
+    // Empty state — Phase 4.4b: cleaning/other dropped, decommissioned added.
     EMPTY_TITLE: `Keine ${labels.asset} gefunden`,
     EMPTY_DESCRIPTION: 'Erstellen Sie den ersten Eintrag',
     EMPTY_OPERATIONAL: `Keine betriebsbereiten ${labels.asset}`,
     EMPTY_MAINTENANCE: `Keine ${labels.asset} in Wartung`,
     EMPTY_REPAIR: `Keine ${labels.asset} in Reparatur`,
     EMPTY_STANDBY: `Keine ${labels.asset} im Stillstand`,
-    EMPTY_CLEANING: `Keine ${labels.asset} in Reinigung`,
-    EMPTY_OTHER: `Keine ${labels.asset} unter Sonstiges`,
+    EMPTY_DECOMMISSIONED: `Keine ${labels.asset} außer Betrieb`,
     EMPTY_FILTER_DESC: `Es gibt aktuell keine ${labels.asset} in dieser Kategorie.`,
 
     // Loading

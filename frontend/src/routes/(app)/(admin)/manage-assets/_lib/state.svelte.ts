@@ -1,6 +1,14 @@
 // =============================================================================
-// MANAGE MACHINES - COMPOSED STATE (Svelte 5 Runes)
+// MANAGE ASSETS - COMPOSED STATE (Svelte 5 Runes)
 // =============================================================================
+//
+// Phase 4.4b (2026-05-05): the asset list, status filter, search query,
+// `loading`, `error`, and `searchOpen` no longer live in client state —
+// they are URL-driven via `+page.server.ts` and read directly from the
+// `data` prop in `+page.svelte`. The facade only exposes form / modal /
+// dropdown state which the form modal still needs.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4b
 
 import { createDataState } from './state-data.svelte';
 import { createDerivedState } from './state-derived.svelte';
@@ -10,7 +18,7 @@ import { createUIState } from './state-ui.svelte';
 
 /**
  * Asset Management State Factory
- * Composes data, UI, form, dropdown, and derived state modules
+ * Composes data, UI, form, dropdown, and derived state modules.
  */
 // eslint-disable-next-line max-lines-per-function -- Facade pattern: composing 5 sub-modules into unified API. Actual reactive logic is in sub-modules.
 function createAssetState() {
@@ -39,13 +47,7 @@ function createAssetState() {
     ui.setDeleteAssetId(null);
   };
   return {
-    // Data (pass through getters and setters)
-    get allAssets() {
-      return data.allAssets;
-    },
-    get filteredAssets() {
-      return data.filteredAssets;
-    },
+    // Reference data (pass through getters and setters)
     get allDepartments() {
       return data.allDepartments;
     },
@@ -55,8 +57,6 @@ function createAssetState() {
     get allTeams() {
       return data.allTeams;
     },
-    setAssets: data.setAssets,
-    setFilteredAssets: data.setFilteredAssets,
     setDepartments: data.setDepartments,
     setAreas: data.setAreas,
     setTeams: data.setTeams,
@@ -64,22 +64,7 @@ function createAssetState() {
       return data.labels;
     },
     setLabels: data.setLabels,
-    // UI (pass through getters and setters)
-    get loading() {
-      return ui.loading;
-    },
-    get error() {
-      return ui.error;
-    },
-    get currentStatusFilter() {
-      return ui.currentStatusFilter;
-    },
-    get currentSearchQuery() {
-      return ui.currentSearchQuery;
-    },
-    get searchOpen() {
-      return ui.searchOpen;
-    },
+    // UI lifecycle (pass through getters and setters)
     get submitting() {
       return ui.submitting;
     },
@@ -95,11 +80,6 @@ function createAssetState() {
     get deleteAssetId() {
       return ui.deleteAssetId;
     },
-    setLoading: ui.setLoading,
-    setError: ui.setError,
-    setCurrentStatusFilter: ui.setCurrentStatusFilter,
-    setCurrentSearchQuery: ui.setCurrentSearchQuery,
-    setSearchOpen: ui.setSearchOpen,
     setSubmitting: ui.setSubmitting,
     setCurrentEditId: ui.setCurrentEditId,
     // Form (pass through getters and setters)

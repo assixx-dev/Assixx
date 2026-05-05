@@ -67,7 +67,7 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
 
 ## Audit checklist (7 items)
 
-### [ ] 1. Frontend `$effect()` cleanup
+### [x] 1. Frontend `$effect()` cleanup
 
 - **Scope**: `frontend/src/**/*.{svelte,svelte.ts}`
 - **Goal**: Every `$effect` that allocates a long-lived resource returns a
@@ -80,8 +80,13 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
 - **DoD**: Every match either has correct cleanup, or is purely synchronous
   DOM/state mutation that allocates nothing.
 - **Reference**: ADR-018 §Tier 1b for frontend unit-test conventions.
+- **Outcome**: verified 2026-05-05 — 173 `$effect` matches across 385 files,
+  0 leaks. Resource allocations cover `addEventListener` (37 files),
+  `IntersectionObserver` (3), `ResizeObserver` (1), `.subscribe(` (3),
+  and debounce `setTimeout` — all with explicit teardown. Zero
+  `$effect.root` usage (no manual-teardown risk).
 
-### [ ] 2. Module-scope `$state` in `.svelte.ts`
+### [x] 2. Module-scope `$state` in `.svelte.ts`
 
 - **Scope**: `frontend/src/**/*.svelte.ts` (explicitly NOT `.svelte`)
 - **Goal**: No unbounded growth in module-scope `$state`. On SSR these live
@@ -91,6 +96,23 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
   (b) has an explicit size cap / TTL / LRU eviction, or (c) is a documented
   intentional singleton with a measured ceiling. Watch: chat history, log
   streams, notification arrays, calendar event caches.
+- **Outcome**: verified 2026-05-05 — strict grep (`^(export )?(let|const) \w+
+(: ...)? = \$state(\.raw)?\(`) finds 57 top-level matches across `.svelte.ts`.
+  55 are bounded primitives (booleans, numbers, `Date`, strings, single-object
+  refs). 2 are `Map` caches (`shiftsCache`/`vacationsCache` in
+  `calendar/_lib/{shift,vacation}-indicators.svelte.ts`) — both `.clear()`
+  before every refill (3× per file), bounded by current calendar view.
+  Broader audit of 105 in-factory `$state` calls: state declared inside
+  `createXxxState()` factories that auto-instantiate as singletons
+  (`documents-explorer`, `calendar/state-user`, `kvp/state-user`, …) replaces
+  collections via assignment (`allDocuments = await apiFetchDocuments()`) —
+  no append-style growth. `createChatPageState` is per-component-instance
+  (invoked from `chat/+page.svelte`), GC'd on unmount. SSR cross-request
+  tenant bleed not via this path: Svelte 5 `$effect` runs client-only
+  (svelte.dev/docs/svelte/$effect), so server-side singletons stay at
+  initial null/empty between requests; tenant-state population happens
+  post-hydration. Multi-tenant SSR isolation is a separate concern (not
+  this audit). 0 true unbounded leaks; no fix this session.
 
 ### [ ] 3. Backend in-memory caches
 
