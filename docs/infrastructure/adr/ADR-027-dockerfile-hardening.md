@@ -350,7 +350,7 @@ Additionally, the PLG observability stack had drifted behind upstream:
 
 | Line | Before                   | After                     | Reason                                   |
 | ---- | ------------------------ | ------------------------- | ---------------------------------------- |
-| 206  | `redis:8-alpine`         | `redis:8.6.2-alpine`      | Stage 0 → Stage 1                        |
+| 206  | `redis:8-alpine`         | `redis:8.6.3-alpine`      | Stage 0 → Stage 1                        |
 | 397  | `nginx:alpine`           | `nginx:1.29.8-alpine`     | Stage 0 → Stage 1                        |
 | 441  | `grafana/loki:3.6.3`     | `grafana/loki:3.7.1`      | Bump (Go/gRPC upgrade)                   |
 | 476  | `prom/prometheus:v3.9.1` | `prom/prometheus:v3.11.1` | Bump (2 minors; OTLP tracing fix)        |
@@ -747,7 +747,7 @@ bookworm-slim (glibc):**
 - `docker/Dockerfile.pg-partman` → stays on `postgres:18.3-alpine` (no outbound
   HTTPS, no musl-DNS exposure; base swap would require a full pg_partman image
   rebuild with large regression surface — see ADR-029)
-- `docker-compose.yml` `redis:8.6.2-alpine` (no outbound HTTPS)
+- `docker-compose.yml` `redis:8.6.3-alpine` (no outbound HTTPS)
 - `docker-compose.yml` `nginx:1.29.8-alpine` (no outbound HTTPS)
 
 Rationale for the scope line: the musl DNS failure class only triggers for

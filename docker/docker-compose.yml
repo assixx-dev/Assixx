@@ -265,7 +265,7 @@ services:
 
   # Redis für Rate-Limiting und Session Cache (REQUIRED for Backend)
   redis:
-    image: redis:8.6.2-alpine
+    image: redis:8.6.3-alpine
     container_name: assixx-redis
     restart: unless-stopped
     # SECURITY: Redis with password authentication

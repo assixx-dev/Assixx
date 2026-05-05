@@ -14,7 +14,7 @@
  *
  * Why GETDEL (not GET + DEL pipeline):
  *   GETDEL (Redis 6.2+) is a single command — truly atomic across replicas. Our Redis
- *   image is 8.6.2 (verified at session start), well above the 6.2 minimum.
+ *   image is 8.6.3 (verified at session start), well above the 6.2 minimum.
  *
  * Sensitive data warning:
  *   Stored payload contains the `codeVerifier`. We never log the payload contents.

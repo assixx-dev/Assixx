@@ -495,7 +495,7 @@ user cannot be redeemed.
 
 **TTL:** 60 s. Long enough for the 303 redirect + subdomain first-render,
 short enough to bound the dump-window. `GETDEL` atomic
-(Redis 6.2+; production Redis 8.6.2).
+(Redis 6.2+; production Redis 8.6.3).
 
 #### Endpoints
 
