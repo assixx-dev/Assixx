@@ -278,9 +278,13 @@ export function buildTeamPayload(formData: {
 }
 
 /**
- * Assign a single hall to a team (or clear assignment)
+ * @deprecated Removed by migration 20260505221345432_simplify-department-hall-1to1.
+ *
+ * Teams inherit the hall from their parent department's hall_id (1:1 model).
+ * To change a team's hall, update the parent department's hall via
+ * PUT /departments/:id/hall. This stub remains as a no-op for legacy callers
+ * and can be deleted in a follow-up cleanup PR.
  */
-export async function assignTeamHall(teamId: number, hallId: number | null): Promise<void> {
-  const hallIds = hallId !== null ? [hallId] : [];
-  await apiClient.post(`${API_ENDPOINTS.TEAMS}/${teamId}/halls`, { hallIds });
+export async function assignTeamHall(_teamId: number, _hallId: number | null): Promise<void> {
+  // Intentional no-op — see deprecation note above.
 }

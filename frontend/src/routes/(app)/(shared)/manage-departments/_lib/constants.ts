@@ -55,6 +55,7 @@ const STATIC_MESSAGES = {
   LABEL_DEPARTMENT_LEAD: 'Leiter',
   LABEL_STATUS: 'Status',
   NO_AREA: 'Keine Zuordnung',
+  NO_HALL: 'Keine Zuordnung',
   NO_DEPARTMENT_LEAD: 'Kein Leiter',
   DEPARTMENT_LEAD_HINT:
     'Nur Admins/Root mit der entsprechenden Leiter-Position stehen zur Auswahl. Zuweisung über die Admin-Verwaltung.',
@@ -136,8 +137,13 @@ export const API_ENDPOINTS = {
   departmentForceDelete(id: number): string {
     return `/departments/${id}?force=true`;
   },
-  departmentHalls(id: number): string {
-    return `/departments/${id}/halls`;
+  /**
+   * 1:1 hall assignment (PUT body: { hallId: number | null }).
+   * Replaces the previous POST /departments/:id/halls (M:N) after migration
+   * 20260505221345432_simplify-department-hall-1to1.
+   */
+  departmentHall(id: number): string {
+    return `/departments/${id}/hall`;
   },
   AREAS: '/areas',
   HALLS: '/halls',
@@ -147,8 +153,8 @@ export const API_ENDPOINTS = {
 
 /**
  * Form default values.
- * Only cross-area halls are form-editable (directHallIds) — area-inherited
- * halls are not part of the mutable form state.
+ * Hall is now a single 1:1 reference (`hallId`) after migration
+ * 20260505221345432_simplify-department-hall-1to1.
  */
 export const FORM_DEFAULTS: {
   name: string;
@@ -156,7 +162,7 @@ export const FORM_DEFAULTS: {
   areaId: number | null;
   departmentLeadId: number | null;
   departmentDeputyLeadId: number | null;
-  directHallIds: number[];
+  hallId: number | null;
   isActive: FormIsActiveStatus;
 } = {
   name: '',
@@ -164,6 +170,6 @@ export const FORM_DEFAULTS: {
   areaId: null,
   departmentLeadId: null,
   departmentDeputyLeadId: null,
-  directHallIds: [],
+  hallId: null,
   isActive: 1,
 };

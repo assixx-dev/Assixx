@@ -19,6 +19,7 @@
   import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
   import { getApiClient } from '$lib/utils/api-client';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   // ADR-045: Layer-1 management gate (canManage) + Layer-2 fine-grained permissions
   import { canManageBlackboard } from '../../_lib/navigation-config';
@@ -52,9 +53,11 @@
   // Permission check
   const permissionDenied = $derived(data.permissionDenied);
 
-  // SSR data as derived - updates automatically when data changes
+  // SSR data as derived - updates automatically when data changes.
+  // `pagination` carries page/limit/total/totalPages plus FE-derived
+  // hasNext/hasPrev — see `$lib/server/api-fetch.ts:PaginationMeta`.
   const entries = $derived(data.entries);
-  const totalPages = $derived(data.totalPages);
+  const pagination = $derived(data.pagination);
   const departments = $derived(data.departments);
   const teams = $derived(data.teams);
   const areas = $derived(data.areas);
@@ -74,22 +77,17 @@
   const apiClient = getApiClient();
 
   // =============================================================================
-  // URL-BASED STATE (Level 3: URL is source of truth for filters)
+  // URL-DRIVEN STATE — server load reads URL, normalises against allow-lists,
+  // and passes through as `data.search/filter/sortBy/sortDir/pagination`.
+  // Single source of truth (FEAT_SERVER_DRIVEN_PAGINATION §4.6).
+  // `editUuid` stays URL-only — it's UI state for deep-linking the edit modal,
+  // not server-loaded list data.
   // =============================================================================
 
-  // Read current filter state from URL
-  const currentPage = $derived(Number($page.url.searchParams.get('page') ?? '1'));
-  const sortBy = $derived($page.url.searchParams.get('sortBy') ?? 'created_at');
-  const sortDir = $derived(($page.url.searchParams.get('sortDir') ?? 'DESC') as 'ASC' | 'DESC');
-  const levelFilter = $derived(
-    ($page.url.searchParams.get('filter') ?? 'all') as
-      | 'all'
-      | 'company'
-      | 'department'
-      | 'team'
-      | 'area',
-  );
-  const searchQuery = $derived($page.url.searchParams.get('search') ?? '');
+  const searchQuery = $derived(data.search);
+  const levelFilter = $derived(data.filter);
+  const sortBy = $derived(data.sortBy);
+  const sortDir = $derived(data.sortDir);
   const editUuid = $derived($page.url.searchParams.get('edit') ?? '');
 
   // Derived UI state
@@ -127,27 +125,58 @@
   let attachmentFiles = $state<File[] | null>(null);
 
   // =============================================================================
-  // URL NAVIGATION HELPERS (Level 3: goto() instead of fetchEntries())
+  // URL NAVIGATION HELPERS — anchor-based pagination + filter→URL goto().
+  // Mirrors `manage-dummies` / `manage-employees` reference impls.
   // =============================================================================
 
-  function buildUrl(params: Record<string, string | number | undefined>): string {
-    const url = new URL($page.url);
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== '' && value !== 'all') {
-        url.searchParams.set(key, String(value));
-      } else {
-        url.searchParams.delete(key);
-      }
-    });
-    return url.pathname + url.search;
+  const BASE_PATH = '/blackboard';
+
+  /**
+   * Build an href for a target page, preserving current search + filter +
+   * sort state. Used by both numbered page links and prev/next anchors.
+   * `buildPaginatedHref` skips defaults so canonical first-page URLs are
+   * clean (`/blackboard` with no query string).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchQuery,
+        filter: levelFilter === 'all' ? undefined : levelFilter,
+        sortBy: sortBy === 'created_at' ? undefined : sortBy,
+        sortDir: sortDir === 'DESC' ? undefined : sortDir,
+      }),
+    );
   }
 
-  async function navigateWithParams(params: Record<string, string | number | undefined>) {
-    await goto(buildUrl(params), { replaceState: true, noScroll: true });
+  /**
+   * Navigate to a new filter / search / sort state. Page resets to 1 (the
+   * default — never emitted into the URL). Used by every filter handler.
+   */
+  async function navigateFilters(next: {
+    search?: string;
+    filter?: typeof levelFilter;
+    sortBy?: typeof sortBy;
+    sortDir?: typeof sortDir;
+  }): Promise<void> {
+    const nextSearch = next.search ?? searchQuery;
+    const nextFilter = next.filter ?? levelFilter;
+    const nextSortBy = next.sortBy ?? sortBy;
+    const nextSortDir = next.sortDir ?? sortDir;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1 (default, not emitted)
+        search: nextSearch,
+        filter: nextFilter === 'all' ? undefined : nextFilter,
+        sortBy: nextSortBy === 'created_at' ? undefined : nextSortBy,
+        sortDir: nextSortDir === 'DESC' ? undefined : nextSortDir,
+      }),
+    );
+    await goto(href, { keepFocus: true, replaceState: true, noScroll: true });
   }
 
   // =============================================================================
-  // FILTER/SORT/PAGE HANDLERS (Level 3: URL-based)
+  // FILTER/SORT/PAGE HANDLERS — thin wrappers over `navigateFilters`.
   // =============================================================================
 
   function toggleFilter(): void {
@@ -155,22 +184,16 @@
   }
 
   async function setLevelFilter(level: typeof levelFilter): Promise<void> {
-    await navigateWithParams({ filter: level, page: 1 });
+    await navigateFilters({ filter: level });
   }
 
   async function setSort(value: string): Promise<void> {
-    const [by, dir] = value.split('|');
-    await navigateWithParams({ sortBy: by, sortDir: dir, page: 1 });
+    const [by, dir] = value.split('|') as [typeof sortBy, typeof sortDir];
+    await navigateFilters({ sortBy: by, sortDir: dir });
   }
 
   async function handleSearch(query: string): Promise<void> {
-    await navigateWithParams({ search: query.trim(), page: 1 });
-  }
-
-  async function goToPage(pageNum: number): Promise<void> {
-    if (pageNum >= 1 && pageNum <= totalPages) {
-      await navigateWithParams({ page: pageNum });
-    }
+    await navigateFilters({ search: query.trim() });
   }
 
   // =============================================================================
@@ -545,34 +568,74 @@
       {/if}
     </div>
 
-    <!-- Pagination -->
-    {#if totalPages > 1}
-      <div class="mt-6 flex items-center justify-center gap-2">
+    <!-- Pagination — URL-driven anchors. Native back/forward + right-click open
+         in new tab + bookmarkable per-page state (FEAT_SERVER_DRIVEN_PAGINATION
+         §"Per-Page Definition of Done" #4). -->
+    {#if pagination.totalPages > 1}
+      <nav
+        class="mt-6 flex items-center justify-center gap-2"
+        aria-label="Seitennavigation"
+      >
         <div class="pagination">
-          <button
-            type="button"
-            class="pagination__btn"
-            disabled={currentPage === 1}
-            onclick={() => goToPage(currentPage - 1)}
-            aria-label="Vorherige Seite"><i class="fas fa-chevron-left"></i></button
-          >
-          {#each Array(totalPages) as _, i (i)}
+          {#if pagination.hasPrev}
+            <a
+              class="pagination__btn"
+              href={pageHref(pagination.page - 1)}
+              rel="prev"
+              aria-label="Vorherige Seite"
+            >
+              <i class="fas fa-chevron-left"></i>
+            </a>
+          {:else}
             <button
               type="button"
               class="pagination__btn"
-              class:active={currentPage === i + 1}
-              onclick={() => goToPage(i + 1)}>{i + 1}</button
+              disabled
+              aria-label="Vorherige Seite"
             >
+              <i class="fas fa-chevron-left"></i>
+            </button>
+          {/if}
+
+          {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as p (p)}
+            {#if p === pagination.page}
+              <span
+                class="pagination__btn active"
+                aria-current="page"
+              >
+                {p}
+              </span>
+            {:else}
+              <a
+                class="pagination__btn"
+                href={pageHref(p)}
+              >
+                {p}
+              </a>
+            {/if}
           {/each}
-          <button
-            type="button"
-            class="pagination__btn"
-            disabled={currentPage === totalPages}
-            onclick={() => goToPage(currentPage + 1)}
-            aria-label="Nächste Seite"><i class="fas fa-chevron-right"></i></button
-          >
+
+          {#if pagination.hasNext}
+            <a
+              class="pagination__btn"
+              href={pageHref(pagination.page + 1)}
+              rel="next"
+              aria-label="Nächste Seite"
+            >
+              <i class="fas fa-chevron-right"></i>
+            </a>
+          {:else}
+            <button
+              type="button"
+              class="pagination__btn"
+              disabled
+              aria-label="Nächste Seite"
+            >
+              <i class="fas fa-chevron-right"></i>
+            </button>
+          {/if}
         </div>
-      </div>
+      </nav>
     {/if}
   </div>
 

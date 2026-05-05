@@ -23,7 +23,6 @@
     buildTeamPayload,
     fetchTeamMembers,
     fetchTeamAssets,
-    assignTeamHall,
   } from './_lib/api';
   import { createMessages } from './_lib/constants';
   import { applyAllFilters } from './_lib/filters';
@@ -54,8 +53,6 @@
   const allLeaders = $derived(data.leaders);
   const allEmployees = $derived(data.employees);
   const allAssets = $derived(data.assets);
-  const allHalls = $derived(data.halls);
-
   // Hierarchy labels from layout data inheritance (A6)
   const labels = $derived(data.hierarchyLabels);
   const messages = $derived(createMessages(labels));
@@ -95,7 +92,9 @@
   let formDeputyLeaderId = $state<number | null>(null);
   let formMemberIds = $state<number[]>([]);
   let formAssetIds = $state<number[]>([]);
-  let formHallId = $state<number | null>(null);
+  // Hall is no longer a form field — teams inherit it from their parent
+  // department's hall_id (1:1 model after migration
+  // 20260505221345432_simplify-department-hall-1to1).
   let formIsActive = $state<FormIsActiveStatus>(1);
 
   // Form Submit Loading
@@ -125,7 +124,6 @@
     deputyLeaderId: number | null;
     memberIds: number[];
     assetIds: number[];
-    hallId: number | null;
     isActive: FormIsActiveStatus;
   }): Promise<void> {
     submitting = true;
@@ -144,7 +142,7 @@
 
       if (teamId) {
         await updateTeamRelations(teamId, formData.memberIds, formData.assetIds, isEditMode);
-        await assignTeamHall(teamId, formData.hallId);
+        // Hall assignment is now read-only at the team level — handled at department.
       }
 
       closeTeamModal();
@@ -241,7 +239,6 @@
     // Set member and asset IDs from fetched data
     formMemberIds = members.map((m) => m.id);
     formAssetIds = assets.map((m) => m.id);
-    formHallId = team.hallIds?.[0] ?? null;
 
     showTeamModal = true;
   }
@@ -277,7 +274,6 @@
     formDeputyLeaderId = null;
     formMemberIds = defaults.memberIds;
     formAssetIds = defaults.assetIds;
-    formHallId = null;
     formIsActive = defaults.isActive;
   }
 
@@ -583,12 +579,12 @@
                         </span>
                       </td>
                       <td>
-                        {#if team.hallNames}
+                        {#if team.hallName !== null && team.hallName !== undefined && team.hallName !== ''}
                           <span
                             class="badge badge--info"
-                            title={team.hallNames}
+                            title={team.hallName}
                           >
-                            {team.hallNames}
+                            <i class="fas fa-building mr-1"></i>{team.hallName}
                           </span>
                         {:else}
                           <span class="badge badge--secondary">—</span>
@@ -662,13 +658,11 @@
       {formDeputyLeaderId}
       {formMemberIds}
       {formAssetIds}
-      {formHallId}
       {formIsActive}
       {allDepartments}
       {allLeaders}
       {allEmployees}
       {allAssets}
-      {allHalls}
       {submitting}
       onclose={closeTeamModal}
       onsubmit={handleFormSubmit}

@@ -13,7 +13,11 @@
  * - GET  /teams/:id/assets         - Get team assets
  * - POST /teams/:id/assets         - Add team asset (admin only)
  * - DELETE /teams/:id/assets/:assetId - Remove team asset (admin only)
- * - POST /teams/:id/halls             - Assign halls to team (admin only)
+ *
+ * Note: hall assignment is no longer a team-level endpoint. Teams inherit
+ * the hall transitively from `team.department.hall_id` (1:1 model after
+ * migration 20260505221345432_simplify-department-hall-1to1). To change a
+ * team's hall, change the parent department's hall via PUT /departments/:id/hall.
  */
 import {
   Body,
@@ -37,7 +41,6 @@ import type { NestAuthUser } from '../common/interfaces/auth.interface.js';
 import {
   AddAssetDto,
   AddMemberDto,
-  AssignHallsToTeamDto,
   CreateTeamDto,
   DeleteTeamQueryDto,
   ListTeamsQueryDto,
@@ -228,20 +231,5 @@ export class TeamsController {
     @TenantId() tenantId: number,
   ): Promise<MessageResponse> {
     return await this.teamsService.removeTeamAsset(id, assetId, tenantId);
-  }
-
-  /**
-   * POST /teams/:id/halls
-   * Assign halls to a team (admin only)
-   */
-  @Post(':id/halls')
-  @Roles('admin', 'root')
-  async assignHalls(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: AssignHallsToTeamDto,
-    @CurrentUser() user: NestAuthUser,
-    @TenantId() tenantId: number,
-  ): Promise<MessageResponse> {
-    return await this.teamsService.assignHallsToTeam(id, dto.hallIds, tenantId, user.id);
   }
 }

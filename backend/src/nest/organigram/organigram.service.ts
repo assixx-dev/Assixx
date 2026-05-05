@@ -282,24 +282,31 @@ export class OrganigramService {
     );
   }
 
+  /**
+   * Department→Hall edges. After migration 20260505221345432_simplify-department-hall-1to1
+   * the M:N junction was replaced with a single `departments.hall_id` column.
+   */
   private async fetchDepartmentHalls(tenantId: number): Promise<DepartmentHallRow[]> {
     return await this.db.tenantQuery<DepartmentHallRow>(
       `SELECT d.uuid AS department_uuid, h.uuid AS hall_uuid
-       FROM department_halls dh
-       JOIN departments d ON dh.department_id = d.id
-       JOIN halls h ON dh.hall_id = h.id
-       WHERE dh.tenant_id = $1`,
+       FROM departments d
+       JOIN halls h ON d.hall_id = h.id
+       WHERE d.tenant_id = $1 AND d.hall_id IS NOT NULL`,
       [tenantId],
     );
   }
 
+  /**
+   * Team→Hall edges. Teams inherit the hall transitively from their parent
+   * department's hall_id (1:1 model, no own team_halls junction anymore).
+   */
   private async fetchTeamHalls(tenantId: number): Promise<TeamHallRow[]> {
     return await this.db.tenantQuery<TeamHallRow>(
       `SELECT t.uuid AS team_uuid, h.uuid AS hall_uuid
-       FROM team_halls th
-       JOIN teams t ON th.team_id = t.id
-       JOIN halls h ON th.hall_id = h.id
-       WHERE th.tenant_id = $1`,
+       FROM teams t
+       JOIN departments d ON t.department_id = d.id AND d.tenant_id = t.tenant_id
+       JOIN halls h ON d.hall_id = h.id
+       WHERE t.tenant_id = $1 AND d.hall_id IS NOT NULL`,
       [tenantId],
     );
   }

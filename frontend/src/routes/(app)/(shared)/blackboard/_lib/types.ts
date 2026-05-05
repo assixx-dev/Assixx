@@ -123,33 +123,10 @@ export interface UpdateEntryData {
   status?: EntryStatus;
 }
 
-export interface PaginatedResponse<T> {
-  entries?: T[];
-  data?: T[];
-  meta?: {
-    pagination: PaginationMeta;
-  };
-}
-
-export interface PaginationMeta {
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
-}
-
-// ============================================================================
-// Filter Types
-// ============================================================================
-
-export interface FilterState {
-  status: EntryStatus;
-  filter: 'all' | OrgLevel;
-  search: string;
-  sortBy: string;
-  sortDir: SortDir;
-  priority?: Priority;
-}
+// NOTE: PaginatedResponse<T>, PaginationMeta, FilterState deleted in
+// FEAT_SERVER_DRIVEN_PAGINATION §4.6 (Session 8c). The +page.server.ts now
+// consumes `PaginatedPermissionResult<BlackboardEntry>` from
+// `$lib/server/api-fetch.ts` — single source of truth for pagination shape.
 
 // ============================================================================
 // Form Types

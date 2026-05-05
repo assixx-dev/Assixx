@@ -853,76 +853,36 @@ describe('TeamsService', () => {
   });
 
   // =============================================================
-  // assignHallsToTeam
+  // getTeamHallId — derived from parent department.hall_id
+  // (replaces the old assignHallsToTeam + getTeamHallIds tests after
+  //  migration 20260505221345432_simplify-department-hall-1to1)
   // =============================================================
 
-  describe('assignHallsToTeam', () => {
-    it('should clear existing and insert new hall assignments', async () => {
-      mockDb.query.mockResolvedValueOnce([makeTeamRow()]); // find team
-      mockDb.query.mockResolvedValueOnce([]); // DELETE existing
-      mockDb.query.mockResolvedValueOnce([]); // INSERT new halls
+  describe('getTeamHallId', () => {
+    it('should return hall_id inherited from the parent department', async () => {
+      mockDb.query.mockResolvedValueOnce([{ hall_id: 42 }]);
 
-      const result = await service.assignHallsToTeam(1, [10, 20, 30], 10, 5);
+      const result = await service.getTeamHallId(1, 10);
 
-      expect(result.message).toBe('3 halls assigned to team');
-      expect(mockDb.query).toHaveBeenCalledTimes(3);
-
-      const insertSql = mockDb.query.mock.calls[2]?.[0] as string;
-      expect(insertSql).toContain('INSERT INTO team_halls');
-      const insertParams = mockDb.query.mock.calls[2]?.[1] as unknown[];
-      expect(insertParams).toEqual([10, 1, 10, 20, 30, 5]);
-    });
-
-    it('should only clear halls when hallIds is empty', async () => {
-      mockDb.query.mockResolvedValueOnce([makeTeamRow()]); // find team
-      mockDb.query.mockResolvedValueOnce([]); // DELETE existing
-
-      const result = await service.assignHallsToTeam(1, [], 10, 5);
-
-      expect(result.message).toBe('0 halls assigned to team');
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
-    });
-
-    it('should throw NotFoundException when team does not exist', async () => {
-      mockDb.query.mockResolvedValueOnce([]); // find team → not found
-
-      await expect(service.assignHallsToTeam(999, [10], 10, 5)).rejects.toThrow(NotFoundException);
-    });
-
-    it('should assign a single hall correctly', async () => {
-      mockDb.query.mockResolvedValueOnce([makeTeamRow()]); // find team
-      mockDb.query.mockResolvedValueOnce([]); // DELETE
-      mockDb.query.mockResolvedValueOnce([]); // INSERT
-
-      const result = await service.assignHallsToTeam(1, [42], 10, 5);
-
-      expect(result.message).toBe('1 halls assigned to team');
-      const insertParams = mockDb.query.mock.calls[2]?.[1] as unknown[];
-      expect(insertParams).toEqual([10, 1, 42, 5]);
-    });
-  });
-
-  // =============================================================
-  // getTeamHallIds
-  // =============================================================
-
-  describe('getTeamHallIds', () => {
-    it('should return hall IDs for a team', async () => {
-      mockDb.query.mockResolvedValueOnce([{ hall_id: 10 }, { hall_id: 20 }, { hall_id: 30 }]);
-
-      const result = await service.getTeamHallIds(1, 10);
-
-      expect(result).toEqual([10, 20, 30]);
+      expect(result).toBe(42);
       const sql = mockDb.query.mock.calls[0]?.[0] as string;
-      expect(sql).toContain('SELECT hall_id FROM team_halls');
+      expect(sql).toContain('FROM teams t');
+      expect(sql).toContain('LEFT JOIN departments d ON t.department_id = d.id');
+      expect(sql).toContain('d.hall_id');
     });
 
-    it('should return empty array when no halls assigned', async () => {
-      mockDb.query.mockResolvedValueOnce([]);
+    it('should return null when the parent department has no hall', async () => {
+      mockDb.query.mockResolvedValueOnce([{ hall_id: null }]);
 
-      const result = await service.getTeamHallIds(1, 10);
+      const result = await service.getTeamHallId(1, 10);
 
-      expect(result).toEqual([]);
+      expect(result).toBeNull();
+    });
+
+    it('should throw NotFoundException when the team does not exist', async () => {
+      mockDb.query.mockResolvedValueOnce([]); // empty rows
+
+      await expect(service.getTeamHallId(999, 10)).rejects.toThrow(NotFoundException);
     });
   });
 });

@@ -11,6 +11,7 @@
 
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
   import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   import { createOrgLevelLabels } from '../_lib/constants';
 
@@ -30,7 +31,19 @@
   const permissionDenied = $derived(data.permissionDenied);
 
   const entries = $derived(data.entries);
+  const pagination = $derived(data.pagination);
   const error = $derived(data.error);
+
+  // =============================================================================
+  // PAGINATION URL HELPER
+  // =============================================================================
+
+  const BASE_PATH = '/blackboard/archived';
+
+  /** Build href for a target page. `buildPaginatedHref` skips page=1 (default). */
+  function pageHref(targetPage: number): string {
+    return resolve(buildPaginatedHref(BASE_PATH, { page: targetPage }));
+  }
 
   // =============================================================================
   // HELPERS
@@ -119,7 +132,7 @@
             Archivierte Einträge
           </h2>
           <p class="mt-1 text-(--color-text-secondary)">
-            Schwarzes Brett - Archiv ({entries.length} Einträge)
+            Schwarzes Brett - Archiv ({pagination.total} Einträge)
           </p>
         </div>
       </div>
@@ -198,6 +211,75 @@
               </tbody>
             </table>
           </div>
+
+          <!-- Pagination — URL-driven anchors. Mirrors main /blackboard route
+               (FEAT_SERVER_DRIVEN_PAGINATION §4.6 / §"Per-Page DoD" #4). -->
+          {#if pagination.totalPages > 1}
+            <nav
+              class="mt-6 flex items-center justify-center gap-2"
+              aria-label="Seitennavigation"
+            >
+              <div class="pagination">
+                {#if pagination.hasPrev}
+                  <a
+                    class="pagination__btn"
+                    href={pageHref(pagination.page - 1)}
+                    rel="prev"
+                    aria-label="Vorherige Seite"
+                  >
+                    <i class="fas fa-chevron-left"></i>
+                  </a>
+                {:else}
+                  <button
+                    type="button"
+                    class="pagination__btn"
+                    disabled
+                    aria-label="Vorherige Seite"
+                  >
+                    <i class="fas fa-chevron-left"></i>
+                  </button>
+                {/if}
+
+                {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as p (p)}
+                  {#if p === pagination.page}
+                    <span
+                      class="pagination__btn active"
+                      aria-current="page"
+                    >
+                      {p}
+                    </span>
+                  {:else}
+                    <a
+                      class="pagination__btn"
+                      href={pageHref(p)}
+                    >
+                      {p}
+                    </a>
+                  {/if}
+                {/each}
+
+                {#if pagination.hasNext}
+                  <a
+                    class="pagination__btn"
+                    href={pageHref(pagination.page + 1)}
+                    rel="next"
+                    aria-label="Nächste Seite"
+                  >
+                    <i class="fas fa-chevron-right"></i>
+                  </a>
+                {:else}
+                  <button
+                    type="button"
+                    class="pagination__btn"
+                    disabled
+                    aria-label="Nächste Seite"
+                  >
+                    <i class="fas fa-chevron-right"></i>
+                  </button>
+                {/if}
+              </div>
+            </nav>
+          {/if}
         {/if}
       </div>
     </div>

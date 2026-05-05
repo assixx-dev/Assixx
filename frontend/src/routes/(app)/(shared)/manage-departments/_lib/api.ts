@@ -209,15 +209,18 @@ export async function loadHalls(): Promise<{
 }
 
 /**
- * Assign halls to a department
+ * Set the (single) hall for a department, or clear it (hallId=null).
+ *
+ * After migration 20260505221345432_simplify-department-hall-1to1, the M:N
+ * `department_halls` junction was replaced with a single `departments.hall_id`
+ * column. The DB trigger trg_enforce_dept_hall_area_match guarantees the
+ * hall's area matches the department's area.
  */
-export async function assignHallsToDepartment(
+export async function setDepartmentHall(
   departmentId: number,
-  hallIds: number[],
+  hallId: number | null,
 ): Promise<void> {
-  await apiClient.post(API_ENDPOINTS.departmentHalls(departmentId), {
-    hallIds,
-  });
+  await apiClient.put(API_ENDPOINTS.departmentHall(departmentId), { hallId });
 }
 
 /**

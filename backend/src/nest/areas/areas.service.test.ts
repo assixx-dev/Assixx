@@ -655,30 +655,34 @@ describe('AreasService', () => {
     it('should assign halls to area', async () => {
       // getAreaById
       mockDb.query.mockResolvedValueOnce([makeAreaRow()]);
-      // Clear existing assignments (halls.area_id = NULL)
+      // Pre-clear departments.hall_id for halls leaving this area (trigger guard)
       mockDb.query.mockResolvedValueOnce([]);
-      // Assign new halls (UPDATE halls SET area_id)
+      // Clear halls.area_id for halls currently in this area
       mockDb.query.mockResolvedValueOnce([]);
-      // Cleanup redundant department_halls for departments of this area
+      // Pre-clear departments.hall_id for halls about to be reassigned (trigger guard)
+      mockDb.query.mockResolvedValueOnce([]);
+      // UPDATE halls SET area_id
       mockDb.query.mockResolvedValueOnce([]);
 
       const result = await service.assignHallsToArea(1, [10, 20], 10);
 
       expect(result.message).toBe('Halls assigned successfully');
-      expect(mockDb.query).toHaveBeenCalledTimes(4);
+      expect(mockDb.query).toHaveBeenCalledTimes(5);
     });
 
     it('should only clear assignments when hallIds is empty', async () => {
       // getAreaById
       mockDb.query.mockResolvedValueOnce([makeAreaRow()]);
-      // Clear existing assignments
+      // Pre-clear departments.hall_id (trigger guard)
+      mockDb.query.mockResolvedValueOnce([]);
+      // Clear halls.area_id
       mockDb.query.mockResolvedValueOnce([]);
 
       const result = await service.assignHallsToArea(1, [], 10);
 
       expect(result.message).toBe('Halls assigned successfully');
-      // Only 2 calls: getAreaById + clear (no assign)
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
+      // 3 calls: getAreaById + dept hall_id clear + halls.area_id clear (no reassign)
+      expect(mockDb.query).toHaveBeenCalledTimes(3);
     });
   });
 

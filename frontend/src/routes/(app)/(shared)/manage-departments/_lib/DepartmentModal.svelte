@@ -20,7 +20,8 @@
     formAreaId: number | null;
     formDepartmentLeadId: number | null;
     formDepartmentDeputyLeadId: number | null;
-    formDirectHallIds: number[];
+    /** Single hall ID (1:1 model after migration 20260505221345432). */
+    formHallId: number | null;
     formIsActive: FormIsActiveStatus;
     allAreas: Area[];
     allHalls: Hall[];
@@ -32,23 +33,36 @@
 
   /* eslint-disable prefer-const, @typescript-eslint/no-useless-default-assignment -- Svelte $bindable() requires let and is not a useless default */
   // prettier-ignore
-  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaId = $bindable(), formDepartmentLeadId = $bindable(), formDepartmentDeputyLeadId = $bindable(), formDirectHallIds = $bindable(), formIsActive = $bindable(), allAreas, allHalls, allDepartmentLeads, submitting, onclose, onsubmit }: Props = $props();
+  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaId = $bindable(), formDepartmentLeadId = $bindable(), formDepartmentDeputyLeadId = $bindable(), formHallId = $bindable(), formIsActive = $bindable(), allAreas, allHalls, allDepartmentLeads, submitting, onclose, onsubmit }: Props = $props();
   /* eslint-enable prefer-const, @typescript-eslint/no-useless-default-assignment */
 
-  // Split halls into inherited (same area as dept) vs available cross-area.
-  // Inherited halls are shown read-only; cross-area halls populate the editable multi-select.
-  const inheritedHalls = $derived(
+  /**
+   * After migration 20260505221345432_simplify-department-hall-1to1, halls are
+   * 1:1 with departments and must belong to the same area. The cross-area
+   * multi-select was removed; only halls with `h.areaId === formAreaId` are
+   * selectable. If the area changes, the selection is auto-cleared.
+   */
+  const sameAreaHalls = $derived(
     formAreaId === null ? [] : allHalls.filter((h) => h.areaId === formAreaId),
   );
-  const crossAreaHalls = $derived(allHalls.filter((h) => h.areaId !== formAreaId));
   const areaName = $derived(
     formAreaId === null ? '' : (allAreas.find((a) => a.id === formAreaId)?.name ?? ''),
   );
+
+  // Auto-clear hall when area changes or when current selection no longer matches.
+  $effect(() => {
+    if (formHallId === null) return;
+    const stillValid = sameAreaHalls.some((h) => h.id === formHallId);
+    if (!stillValid) {
+      formHallId = null;
+    }
+  });
 
   // Local dropdown states
   let areaDropdownOpen = $state(false);
   let leadDropdownOpen = $state(false);
   let deputyLeadDropdownOpen = $state(false);
+  let hallDropdownOpen = $state(false);
   let statusDropdownOpen = $state(false);
 
   // Derived dropdown display names
@@ -56,6 +70,12 @@
   const selectedLeadName = $derived(getSelectedLeadName(formDepartmentLeadId, allDepartmentLeads));
   const selectedDeputyLeadName = $derived(
     getSelectedLeadName(formDepartmentDeputyLeadId, allDepartmentLeads),
+  );
+  // Hall is 1:1 and area-scoped; show the matching hall name or NO_HALL fallback.
+  const selectedHallName = $derived(
+    formHallId === null ?
+      messages.NO_HALL
+    : (sameAreaHalls.find((h) => h.id === formHallId)?.name ?? messages.NO_HALL),
   );
 
   // =============================================================================
@@ -66,6 +86,7 @@
     e.stopPropagation();
     leadDropdownOpen = false;
     deputyLeadDropdownOpen = false;
+    hallDropdownOpen = false;
     statusDropdownOpen = false;
     areaDropdownOpen = !areaDropdownOpen;
   }
@@ -79,6 +100,7 @@
     e.stopPropagation();
     areaDropdownOpen = false;
     deputyLeadDropdownOpen = false;
+    hallDropdownOpen = false;
     statusDropdownOpen = false;
     leadDropdownOpen = !leadDropdownOpen;
   }
@@ -92,6 +114,7 @@
     e.stopPropagation();
     areaDropdownOpen = false;
     leadDropdownOpen = false;
+    hallDropdownOpen = false;
     statusDropdownOpen = false;
     deputyLeadDropdownOpen = !deputyLeadDropdownOpen;
   }
@@ -101,11 +124,26 @@
     deputyLeadDropdownOpen = false;
   }
 
+  function toggleHallDropdown(e: MouseEvent): void {
+    e.stopPropagation();
+    areaDropdownOpen = false;
+    leadDropdownOpen = false;
+    deputyLeadDropdownOpen = false;
+    statusDropdownOpen = false;
+    hallDropdownOpen = !hallDropdownOpen;
+  }
+
+  function selectHall(hallId: number | null): void {
+    formHallId = hallId;
+    hallDropdownOpen = false;
+  }
+
   function toggleStatusDropdown(e: MouseEvent): void {
     e.stopPropagation();
     areaDropdownOpen = false;
     leadDropdownOpen = false;
     deputyLeadDropdownOpen = false;
+    hallDropdownOpen = false;
     statusDropdownOpen = !statusDropdownOpen;
   }
 
@@ -128,6 +166,7 @@
       areaDropdownOpen = false;
       leadDropdownOpen = false;
       deputyLeadDropdownOpen = false;
+      hallDropdownOpen = false;
       statusDropdownOpen = false;
     }
   });
@@ -135,7 +174,11 @@
   // Close dropdowns on outside click
   $effect(() => {
     const anyDropdownOpen =
-      areaDropdownOpen || leadDropdownOpen || deputyLeadDropdownOpen || statusDropdownOpen;
+      areaDropdownOpen ||
+      leadDropdownOpen ||
+      deputyLeadDropdownOpen ||
+      hallDropdownOpen ||
+      statusDropdownOpen;
     if (!anyDropdownOpen) return;
 
     const handleClick = (e: MouseEvent): void => {
@@ -148,6 +191,9 @@
       }
       if (deputyLeadDropdownOpen && isClickOutsideElement(target, 'deputy-lead-dropdown')) {
         deputyLeadDropdownOpen = false;
+      }
+      if (hallDropdownOpen && isClickOutsideElement(target, 'hall-dropdown')) {
+        hallDropdownOpen = false;
       }
       if (statusDropdownOpen && isClickOutsideElement(target, 'status-dropdown')) {
         statusDropdownOpen = false;
@@ -403,65 +449,80 @@
           {/if}
         </div>
 
-        <!-- Inherited halls info (Section 1): shown only when dept has an area WITH halls -->
-        {#if inheritedHalls.length > 0}
-          <div
-            class="alert alert--info alert--sm"
-            style="margin-bottom: var(--spacing-3);"
-          >
-            <span class="alert__icon">
-              <i class="fas fa-info-circle"></i>
-            </span>
-            <div class="alert__content">
-              <p class="alert__message">
-                {messages.hallsInheritedInfo(inheritedHalls.length, areaName)}
-              </p>
-              <ul class="mt-2 flex flex-wrap gap-1">
-                {#each inheritedHalls as hall (hall.id)}
-                  <li>
-                    <span class="badge badge--info">
-                      <i class="fas fa-lock mr-1"></i>{hall.name}
-                    </span>
-                  </li>
-                {/each}
-              </ul>
-              <p class="mt-2 text-sm opacity-75">
-                {messages.HALLS_INHERITED_HINT}
-              </p>
-            </div>
-          </div>
-        {/if}
-
-        <!-- Cross-area halls (Section 2): editable multi-select, optional -->
+        <!--
+          Hall (1:1, must match the department's area).
+          The DB trigger trg_enforce_dept_hall_area_match enforces the
+          area-match invariant; the dropdown only lists same-area halls.
+        -->
         <div class="form-field">
           <label
             class="form-field__label"
-            for="department-direct-halls"
+            for="department-hall"
           >
             <i class="fas fa-warehouse mr-1"></i>
-            {messages.LABEL_HALLS_DIRECT}
+            Halle
           </label>
-          {#if crossAreaHalls.length > 0}
-            <select
-              id="department-direct-halls"
-              name="directHallIds"
-              multiple
-              class="multi-select"
-              bind:value={formDirectHallIds}
-            >
-              {#each crossAreaHalls as hall (hall.id)}
-                <option value={hall.id}>{hall.name}</option>
-              {/each}
-            </select>
-          {:else}
+          {#if formAreaId === null}
             <p class="form-field__message text-(--color-text-secondary)">
-              {messages.NO_DIRECT_HALLS_AVAILABLE}
+              <i class="fas fa-info-circle mr-1"></i>
+              Bitte zuerst einen Bereich wählen — die Halle muss zum Bereich der Abteilung gehören.
             </p>
+          {:else if sameAreaHalls.length === 0}
+            <p class="form-field__message text-(--color-text-secondary)">
+              <i class="fas fa-info-circle mr-1"></i>
+              Im Bereich "{areaName}" sind keine Hallen vorhanden.
+            </p>
+          {:else}
+            <input
+              type="hidden"
+              id="hall-hidden"
+              value={formHallId ?? ''}
+            />
+            <div
+              class="dropdown"
+              id="hall-dropdown"
+            >
+              <button
+                type="button"
+                class="dropdown__trigger"
+                class:active={hallDropdownOpen}
+                onclick={toggleHallDropdown}
+              >
+                <span>{selectedHallName}</span>
+                <i class="fas fa-chevron-down"></i>
+              </button>
+              <div
+                class="dropdown__menu"
+                class:active={hallDropdownOpen}
+              >
+                <button
+                  type="button"
+                  class="dropdown__option"
+                  onclick={() => {
+                    selectHall(null);
+                  }}
+                >
+                  {messages.NO_HALL}
+                </button>
+                {#each sameAreaHalls as hall (hall.id)}
+                  <button
+                    type="button"
+                    class="dropdown__option"
+                    onclick={() => {
+                      selectHall(hall.id);
+                    }}
+                  >
+                    {hall.name}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <span class="form-field__message text-(--color-text-secondary)">
+              <i class="fas fa-info-circle mr-1"></i>
+              Genau eine Halle aus dem Bereich "{areaName}". Teams dieser Abteilung erben die Halle
+              automatisch.
+            </span>
           {/if}
-          <span class="form-field__message text-(--color-text-secondary)">
-            <i class="fas fa-info-circle mr-1"></i>
-            {messages.HALLS_HINT_DIRECT}
-          </span>
         </div>
 
         {#if isEditMode}

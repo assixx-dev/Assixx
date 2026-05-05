@@ -14,7 +14,7 @@
   import {
     buildDepartmentPayload,
     saveDepartment as apiSaveDepartment,
-    assignHallsToDepartment as apiAssignHalls,
+    setDepartmentHall as apiSetDepartmentHall,
     deleteDepartment as apiDeleteDepartment,
     forceDeleteDepartment as apiForceDeleteDepartment,
     buildDependencyMessage,
@@ -29,7 +29,7 @@
     getAreaDisplay,
     getLeadDisplay,
     getTeamCountText,
-    getHallCountText,
+    getHallDisplayText,
     getHallTooltip,
     populateFormFromDepartment,
     getDefaultFormValues,
@@ -87,7 +87,7 @@
   let formAreaId: number | null = $state(null);
   let formDepartmentLeadId: number | null = $state(null);
   let formDepartmentDeputyLeadId: number | null = $state(null);
-  let formDirectHallIds: number[] = $state([]);
+  let formHallId: number | null = $state(null);
   let formIsActive: FormIsActiveStatus = $state(1);
 
   // Form Submit Loading
@@ -126,7 +126,7 @@
     });
     const result = await apiSaveDepartment(payload, currentEditId);
     if (result.success && result.departmentId !== null) {
-      await apiAssignHalls(result.departmentId, formDirectHallIds);
+      await apiSetDepartmentHall(result.departmentId, formHallId);
       closeDepartmentModal();
       await invalidateAll();
       showSuccessAlert(isEditMode ? 'Erfolgreich aktualisiert' : 'Erfolgreich erstellt');
@@ -205,7 +205,7 @@
     formAreaId = formData.areaId;
     formDepartmentLeadId = formData.departmentLeadId;
     formDepartmentDeputyLeadId = formData.departmentDeputyLeadId;
-    formDirectHallIds = formData.directHallIds;
+    formHallId = formData.hallId;
     formIsActive = formData.isActive;
     showDepartmentModal = true;
   }
@@ -239,7 +239,7 @@
     formAreaId = defaults.areaId;
     formDepartmentLeadId = defaults.departmentLeadId;
     formDepartmentDeputyLeadId = defaults.departmentDeputyLeadId;
-    formDirectHallIds = defaults.directHallIds;
+    formHallId = defaults.hallId;
     formIsActive = defaults.isActive;
   }
 
@@ -536,12 +536,12 @@
                       </td>
                       <td>
                         <span
-                          class="badge {(dept.hallCount ?? 0) > 0 ?
+                          class="badge {dept.hall !== null && dept.hall !== undefined ?
                             'badge--info'
                           : 'badge--secondary'}"
-                          title={getHallTooltip(dept.halls ?? [])}
+                          title={getHallTooltip(dept.hall ?? null)}
                         >
-                          {getHallCountText(dept.hallCount ?? 0, labels.hall)}
+                          {getHallDisplayText(dept.hall ?? null)}
                         </span>
                       </td>
                       <td>
@@ -612,7 +612,7 @@
     bind:formAreaId
     bind:formDepartmentLeadId
     bind:formDepartmentDeputyLeadId
-    bind:formDirectHallIds
+    bind:formHallId
     bind:formIsActive
     {allAreas}
     {allHalls}

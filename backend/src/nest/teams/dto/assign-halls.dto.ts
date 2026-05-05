@@ -1,15 +1,11 @@
 /**
- * Assign Halls DTO
+ * @deprecated Removed by migration 20260505221345432_simplify-department-hall-1to1.
  *
- * Validation schema for bulk assigning halls to a team.
+ * Teams no longer have an own hall assignment. They inherit the hall from
+ * their parent Department's `hall_id` column (1:1 model). To change a team's
+ * hall, change the parent department's hall via PUT /departments/:id/hall.
+ *
+ * This file is kept empty so the path remains stable for git history.
+ * It can be safely deleted in a follow-up cleanup PR.
  */
-import { createZodDto } from 'nestjs-zod';
-import { z } from 'zod';
-
-export const AssignHallsToTeamSchema = z.object({
-  hallIds: z
-    .array(z.coerce.number().int().positive('Hall ID must be a positive integer'))
-    .min(0, 'Hall IDs must be an array'),
-});
-
-export class AssignHallsToTeamDto extends createZodDto(AssignHallsToTeamSchema) {}
+export {};

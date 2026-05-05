@@ -15,3 +15,18 @@
 #         https://github.com/aquasecurity/trivy/discussions/6722
 # REVIEW: Remove when base image upgrades to Debian Trixie (zlib1g 1:1.3+).
 CVE-2023-45853 exp:2026-10-17
+
+# CVE-2026-33845 - GnuTLS DTLS zero-length fragment DoS
+# STATUS: Not Affected (vendor-tracker: unfixed in Debian Bookworm)
+# REASON: Backend stack = Node 24 + OpenSSL. Keine GnuTLS/DTLS/WebRTC-
+#         Dependency in package.json (verifiziert via grep über alle
+#         workspace package.json-Files). libgnutls30 ist transitive
+#         Debian-Layer (apt, util-linux) und wird vom Application-Code
+#         nicht aufgerufen. DTLS-Angriffsvektor (UDP-basierter TLS-
+#         Handshake) existiert in unserem Threat-Model nicht: kein
+#         WebRTC, kein VoIP/SIP, kein QUIC, kein UDP-Service exposed.
+# REFS:   https://avd.aquasec.com/nvd/cve-2026-33845
+#         https://security-tracker.debian.org/tracker/CVE-2026-33845
+# REVIEW: Entfernen sobald Debian Bookworm den Patch backportet ODER
+#         Base-Image-Upgrade auf Debian Trixie.
+CVE-2026-33845 exp:2026-08-06

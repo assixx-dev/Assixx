@@ -13,8 +13,15 @@
     toggleIdInArray,
   } from './utils';
 
-  import type { Department, Admin, TeamMember, Asset, Hall, FormIsActiveStatus } from './types';
+  import type { Department, Admin, TeamMember, Asset, FormIsActiveStatus } from './types';
 
+  /**
+   * Team form modal — Hall is now READ-ONLY and inherited from the parent
+   * Department (1:1 model, see migration
+   * 20260505221345432_simplify-department-hall-1to1). The dropdown was
+   * removed; the hall is shown as an info badge derived from the selected
+   * Department's `hallId`/`hallName`.
+   */
   interface Props {
     isEditMode: boolean;
     modalTitle: string;
@@ -26,13 +33,11 @@
     formDeputyLeaderId: number | null;
     formMemberIds: number[];
     formAssetIds: number[];
-    formHallId: number | null;
     formIsActive: FormIsActiveStatus;
     allDepartments: Department[];
     allLeaders: Admin[];
     allEmployees: TeamMember[];
     allAssets: Asset[];
-    allHalls: Hall[];
     submitting: boolean;
     onclose: () => void;
     onsubmit: (data: {
@@ -43,7 +48,6 @@
       deputyLeaderId: number | null;
       memberIds: number[];
       assetIds: number[];
-      hallId: number | null;
       isActive: FormIsActiveStatus;
     }) => void;
   }
@@ -60,13 +64,11 @@
     formDeputyLeaderId,
     formMemberIds,
     formAssetIds,
-    formHallId,
     formIsActive,
     allDepartments,
     allLeaders,
     allEmployees,
     allAssets,
-    allHalls,
     submitting,
     onclose,
     onsubmit,
@@ -82,7 +84,6 @@
   let localDeputyLeaderId = $state<number | null>(null);
   let localMemberIds = $state<number[]>([]);
   let localAssetIds = $state<number[]>([]);
-  let localHallId = $state<number | null>(null);
   let localIsActive = $state<FormIsActiveStatus>(1);
 
   // Sync props to local state when they change
@@ -94,13 +95,11 @@
     localDeputyLeaderId = formDeputyLeaderId;
     localMemberIds = [...formMemberIds];
     localAssetIds = [...formAssetIds];
-    localHallId = formHallId;
     localIsActive = formIsActive;
   });
 
-  // Dropdown states
+  // Dropdown states (no hallDropdownOpen — hall is read-only now)
   let departmentDropdownOpen = $state(false);
-  let hallDropdownOpen = $state(false);
   let leaderDropdownOpen = $state(false);
   let deputyLeaderDropdownOpen = $state(false);
   let membersDropdownOpen = $state(false);
@@ -112,37 +111,22 @@
     allEmployees.filter((e: TeamMember) => e.id !== localLeaderId),
   );
 
-  // Filtered halls: only halls assigned to the selected department
-  const departmentHalls = $derived.by((): Hall[] => {
-    const deptId = localDepartmentId;
-    if (deptId === null) return [];
-    return allHalls.filter((h: Hall) => h.departmentIds?.includes(deptId) === true);
-  });
-
-  const hallDropdownDisabled = $derived(localDepartmentId === null || departmentHalls.length <= 1);
-
-  const hallInfoMessage = $derived.by((): string => {
-    if (localDepartmentId === null) return messages.HALL_INFO_NO_DEPARTMENT;
-    if (departmentHalls.length === 0) return messages.HALL_INFO_NO_HALLS;
-    if (departmentHalls.length === 1) return messages.HALL_INFO_AUTO_ASSIGNED;
-    return '';
-  });
-
-  // Auto-assign hall when department has exactly 1 hall; validate existing selection
-  $effect(() => {
-    const halls = departmentHalls;
-    if (halls.length === 1) {
-      localHallId = halls[0].id;
-    } else if (halls.length === 0) {
-      localHallId = null;
-    } else if (localHallId !== null && !halls.some((h: Hall) => h.id === localHallId)) {
-      localHallId = null;
-    }
+  /**
+   * Hall info derived from the selected department.
+   * Read-only: the team inherits the hall from its parent department.
+   */
+  const inheritedHall = $derived.by((): { name: string | null; sourceDept: string | null } => {
+    if (localDepartmentId === null) return { name: null, sourceDept: null };
+    const dept = allDepartments.find((d: Department) => d.id === localDepartmentId);
+    if (dept === undefined) return { name: null, sourceDept: null };
+    return {
+      name: dept.hallName ?? null,
+      sourceDept: dept.name,
+    };
   });
 
   function closeOtherDropdowns(except: string): void {
     if (except !== 'department') departmentDropdownOpen = false;
-    if (except !== 'hall') hallDropdownOpen = false;
     if (except !== 'leader') leaderDropdownOpen = false;
     if (except !== 'deputyLeader') deputyLeaderDropdownOpen = false;
     if (except !== 'members') membersDropdownOpen = false;
@@ -159,24 +143,6 @@
   function selectDepartment(id: number | null): void {
     localDepartmentId = id;
     departmentDropdownOpen = false;
-  }
-
-  function toggleHallDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    if (hallDropdownDisabled) return;
-    closeOtherDropdowns('hall');
-    hallDropdownOpen = !hallDropdownOpen;
-  }
-
-  function selectHall(id: number | null): void {
-    localHallId = id;
-    hallDropdownOpen = false;
-  }
-
-  function getHallDisplayText(): string {
-    if (localHallId === null) return '— Keine Zuordnung —';
-    const hall = allHalls.find((h: Hall) => h.id === localHallId);
-    return hall?.name ?? '— Keine Zuordnung —';
   }
 
   function toggleLeaderDropdown(e: MouseEvent): void {
@@ -242,7 +208,6 @@
       deputyLeaderId: localDeputyLeaderId,
       memberIds: localMemberIds,
       assetIds: localAssetIds,
-      hallId: localHallId,
       isActive: localIsActive,
     });
   }
@@ -251,7 +216,6 @@
   $effect(() => {
     return onClickOutsideDropdown(() => {
       departmentDropdownOpen = false;
-      hallDropdownOpen = false;
       leaderDropdownOpen = false;
       deputyLeaderDropdownOpen = false;
       membersDropdownOpen = false;
@@ -367,72 +331,45 @@
         </div>
       </div>
 
-      {#if allHalls.length > 0}
-        <div class="form-field">
-          <label
-            class="form-field__label"
-            for="team-hall">{labels.hall}</label
-          >
-          {#if hallDropdownDisabled && hallInfoMessage.length > 0}
-            <div
-              class="alert alert--info alert--sm"
-              role="status"
-              id="hall-info"
-              style="margin-bottom: var(--spacing-3);"
-            >
-              <span class="alert__icon">
-                <i class="fas fa-info-circle"></i>
-              </span>
-              <div class="alert__content">
-                <p class="alert__message">{hallInfoMessage}</p>
-              </div>
-            </div>
-          {/if}
-          <div
-            class="dropdown"
-            id="hall-dropdown"
-          >
-            <button
-              type="button"
-              class="dropdown__trigger"
-              class:active={hallDropdownOpen}
-              disabled={hallDropdownDisabled}
-              aria-describedby={hallDropdownDisabled ? 'hall-info' : undefined}
-              onclick={toggleHallDropdown}
-            >
-              <span>{getHallDisplayText()}</span>
-              <i class="fas fa-chevron-down"></i>
-            </button>
-            {#if !hallDropdownDisabled}
-              <div
-                class="dropdown__menu"
-                class:active={hallDropdownOpen}
-              >
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectHall(null);
-                  }}
+      <!--
+        Hall is read-only: it is inherited from the selected Department
+        (1:1 model after migration 20260505221345432_simplify-department-hall-1to1).
+        To change the team's hall, the parent Department's hall must be changed.
+      -->
+      <div class="form-field">
+        <label
+          class="form-field__label"
+          for="team-hall-display">{labels.hall}</label
+        >
+        <div
+          id="team-hall-display"
+          class="alert alert--info alert--sm"
+          role="status"
+          style="margin-bottom: var(--spacing-3);"
+        >
+          <span class="alert__icon">
+            <i class="fas fa-lock"></i>
+          </span>
+          <div class="alert__content">
+            {#if inheritedHall.name !== null}
+              <p class="alert__message">
+                <span class="badge badge--info"
+                  ><i class="fas fa-building mr-1"></i>{inheritedHall.name}</span
                 >
-                  — Keine Zuordnung —
-                </button>
-                {#each departmentHalls as hall (hall.id)}
-                  <button
-                    type="button"
-                    class="dropdown__option"
-                    onclick={() => {
-                      selectHall(hall.id);
-                    }}
-                  >
-                    {hall.name}
-                  </button>
-                {/each}
-              </div>
+                <span class="ml-2 opacity-75">— Quelle: {inheritedHall.sourceDept ?? '—'}</span>
+              </p>
+              <p class="mt-2 text-sm opacity-75">
+                Die Halle wird automatisch von der Abteilung übernommen. Änderungen erfolgen über
+                die Abteilungs-Verwaltung.
+              </p>
+            {:else if localDepartmentId === null}
+              <p class="alert__message">{messages.HALL_INFO_NO_DEPARTMENT}</p>
+            {:else}
+              <p class="alert__message">Die ausgewählte Abteilung hat keine Halle zugewiesen.</p>
             {/if}
           </div>
         </div>
-      {/if}
+      </div>
 
       <div class="form-field">
         <label
