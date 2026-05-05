@@ -188,4 +188,33 @@ describe('AuditRequestFilterService', () => {
       expect(service.shouldSkipRequest('GET', '/users/me', false, user)).toBe(false);
     });
   });
+
+  // =============================================================
+  // OnModuleDestroy — timer cleanup
+  // Regression: AUDIT_MEMORY_LEAKS.md step 3 (2026-05-05).
+  // Constructor's setInterval handle was discarded → process never exits
+  // cleanly on shutdown and Vitest reports a hanging timer.
+  // =============================================================
+
+  describe('OnModuleDestroy — interval cleanup', () => {
+    it('registers exactly one cleanup interval in the constructor', () => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it('clears the cleanup interval on onModuleDestroy()', async () => {
+      // Pre-condition: constructor registered the timer.
+      expect(vi.getTimerCount()).toBe(1);
+
+      // Cast so this test fails red BEFORE the fix lands (no method) and
+      // green AFTER (method exists on the service).
+      const lifecycle = service as unknown as {
+        onModuleDestroy: () => void | Promise<void>;
+      };
+      expect(typeof lifecycle.onModuleDestroy).toBe('function');
+
+      await lifecycle.onModuleDestroy();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
 });

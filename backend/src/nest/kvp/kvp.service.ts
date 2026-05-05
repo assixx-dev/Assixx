@@ -307,14 +307,15 @@ export class KvpService {
     const suggestions = await this.db.tenantQuery<DbSuggestion>(query, params);
     const transformed = suggestions.map((s: DbSuggestion) => transformSuggestion(s));
 
+    // ADR-007 canonical pagination envelope (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.5a).
+    // Wrapper key `items` is detected by ResponseInterceptor.isPaginatedResponse and
+    // flattened to `{ data: T[], meta: { pagination } }`. `totalPages = 0` when no rows
+    // — matches dummy-users reference impl (Phase 3.1) and keeps FE empty-state +
+    // `hasNext = page < totalPages` derivation consistent.
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
     return {
-      suggestions: transformed,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(total / limit),
-        pageSize: limit,
-        totalItems: total,
-      },
+      items: transformed,
+      pagination: { page, limit, total, totalPages },
     };
   }
 

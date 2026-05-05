@@ -114,7 +114,7 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
   post-hydration. Multi-tenant SSR isolation is a separate concern (not
   this audit). 0 true unbounded leaks; no fix this session.
 
-### [ ] 3. Backend in-memory caches
+### [x] 3. Backend in-memory caches
 
 - **Scope**: `backend/src/**/*.ts`
 - **Goal**: Every cache has bounded size or TTL/eviction; cleared in
@@ -124,6 +124,29 @@ Ignore Stop-hook commit nudges if the audit produced no fix this session.
   `backend/src/websocket.ts` first — it's the obvious accumulator.
 - **DoD**: Each cache documented with bound + eviction strategy, or migrated
   to Redis if unbounded growth is genuinely required.
+- **Outcome**: verified 2026-05-05 — 1 fix landed, all other caches bounded.
+  - `presenceStore` (`backend/src/nest/chat/presence.store.ts:15`,
+    `Set<userId>`): added on connect, deleted on `handleDisconnection`,
+    bounded by concurrent users. Safe.
+  - `clients` Map (`backend/src/websocket.ts:88`,
+    `Map<userId, ExtendedWebSocket>`): same eviction discipline,
+    `shutdown()` clears heartbeat interval. Safe.
+  - `permission-registry.service.ts:21` (`Map<addonCode, …>`): populated once
+    via `OnModuleInit` registrars, never mutated thereafter. Static-lookup
+    bounded by ~20–50 addons. Safe.
+  - 5 module-scope `const … = new Set([...])` (calendar/blackboard sort
+    columns, freemail blocklist, apex hosts, work-order linked-source
+    types): all hardcoded immutable allowlists. Safe.
+  - **LEAK FIXED**: `audit-request-filter.service.ts:29` —
+    `setInterval` handle was discarded; no `OnModuleDestroy`. Constructor
+    started a 5-min cleanup interval that kept the Node event loop alive
+    past app teardown and accumulated across hot-reloads. Fix: capture
+    the handle in `private readonly cleanupInterval`, implement
+    `OnModuleDestroy` that calls `clearInterval` + `recentLogs.clear()`.
+    Regression test: `audit-request-filter.service.test.ts` →
+    `OnModuleDestroy — interval cleanup` (asserts `vi.getTimerCount()`
+    is 1 after construction, 0 after `onModuleDestroy()`). Commit pending
+    (`fix(audit): clear cleanup interval on module destroy`).
 
 ### [ ] 4. Sibling `eventBus.on(...)` callers
 
