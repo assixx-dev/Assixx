@@ -27,16 +27,22 @@ export const IS_ACTIVE_BADGE_CLASSES: Record<number, string> = {
 // FILTER OPTIONS
 // =============================================================================
 
-/** Status filter options for toggle group */
+/**
+ * Status filter options for toggle group.
+ * Order matches `manage-admins` (Aktiv → Inaktiv → Archiviert → Alle) so the
+ * default-selected "Aktiv" sits leftmost and the no-filter "Alle" sentinel
+ * lives at the far right — consistent visual reading order across all
+ * manage-* pages (per UX feedback 2026-05).
+ */
 export const STATUS_FILTER_OPTIONS: {
   value: number | 'all';
   label: string;
   icon: string;
 }[] = [
-  { value: 'all', label: 'Alle', icon: 'fa-list' },
-  { value: IS_ACTIVE.ACTIVE, label: 'Aktiv', icon: 'fa-check-circle' },
+  { value: IS_ACTIVE.ACTIVE, label: 'Aktiv', icon: 'fa-check' },
   { value: IS_ACTIVE.INACTIVE, label: 'Inaktiv', icon: 'fa-times-circle' },
   { value: IS_ACTIVE.ARCHIVED, label: 'Archiviert', icon: 'fa-archive' },
+  { value: 'all', label: 'Alle', icon: 'fa-list' },
 ];
 
 // =============================================================================

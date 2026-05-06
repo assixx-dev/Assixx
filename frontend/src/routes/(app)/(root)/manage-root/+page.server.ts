@@ -63,10 +63,16 @@ export const load: PageServerLoad = async ({ cookies, fetch, locals, url }) => {
   // input — see `frontend/src/lib/utils/url-pagination.ts`.
   const page = readPageFromUrl(url);
   const search = readSearchFromUrl(url);
-  const status = readFilterFromUrl<StatusFilter>(url, 'isActive', STATUS_FILTERS, 'all');
+  // UX default: show only ACTIVE root users on bare URL (`/manage-root`).
+  // Was `'all'` until 2026-05; product feedback — admins want the live set
+  // first, archived/inactive only on explicit toggle. Implication: FE-default
+  // ('1') ≠ BE-default (no filter), so we MUST send `isActive=1` to the
+  // backend on the canonical URL — the "defaults never sent" rule from R5
+  // §0.2 only applies when FE-default == BE-default.
+  const status = readFilterFromUrl<StatusFilter>(url, 'isActive', STATUS_FILTERS, '1');
 
-  // State → backend query string. Defaults are NEVER sent to the backend
-  // (R5 mitigation §0.2: clean canonical URLs for default state).
+  // State → backend query string. `'all'` is the no-filter sentinel and is
+  // intentionally NOT forwarded — backend treats absent param as "all rows".
   const params = new URLSearchParams();
   params.set('role', 'root');
   params.set('page', String(page));

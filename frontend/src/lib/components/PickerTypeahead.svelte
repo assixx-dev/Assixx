@@ -29,6 +29,7 @@
 -->
 <script lang="ts">
   import { onClickOutsideDropdown } from '$lib/actions/click-outside';
+  import SearchResultUser from '$lib/components/SearchResultUser.svelte';
   import { apiClient } from '$lib/utils/api-client';
   import { createLogger } from '$lib/utils/logger';
 
@@ -460,23 +461,33 @@
           class:picker-typeahead__option--selected={selectedAlready}
           role="option"
           aria-selected={selectedAlready}
+          onmouseenter={() => {
+            activeIndex = i;
+          }}
         >
-          <button
-            type="button"
-            class="picker-typeahead__option-btn"
-            {disabled}
+          <!--
+            Suggestion row uses the design-system SearchResultUser primitive
+            (same markup chat-search uses) for visual consistency: avatar +
+            highlighted name + #employeeNumber · email + role badge.
+            `status` is intentionally omitted — picker has no online dot.
+            Disabled state is handled via the parent `picker-typeahead--disabled`
+            wrapper (`pointer-events: none`), so no inner disabled prop needed.
+          -->
+          <SearchResultUser
+            id={opt.raw.id}
+            firstName={opt.raw.firstName ?? undefined}
+            lastName={opt.raw.lastName ?? undefined}
+            username={opt.raw.username}
+            email={opt.raw.email}
+            imageUrl={opt.raw.profilePicture}
+            role={opt.raw.role}
+            employeeNumber={opt.raw.employeeNumber ?? undefined}
+            position={opt.raw.position ?? undefined}
+            query={inputValue}
             onclick={() => {
               selectOption(opt);
             }}
-            onmouseenter={() => {
-              activeIndex = i;
-            }}
-          >
-            <span class="picker-typeahead__option-label">{opt.label}</span>
-            {#if opt.sublabel !== undefined && opt.sublabel !== ''}
-              <span class="picker-typeahead__option-sublabel">{opt.sublabel}</span>
-            {/if}
-          </button>
+          />
         </li>
       {/each}
     {/if}
@@ -559,42 +570,36 @@
 
   .picker-typeahead__option {
     /* Reset list styles — the design-system dropdown__option assumes a
-       button child, but we wrap in <li> for listbox semantics. */
+       button child, but we wrap in <li> for listbox semantics. The actual
+       suggestion row markup is rendered by the SearchResultUser DS
+       component which carries its own padding/background. */
     padding: 0;
+    list-style: none;
   }
 
-  .picker-typeahead__option-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.125rem;
+  /* Force the row to fill the listbox width. Chat's parent overlay
+     (.search-input__results) is position:absolute with left:0/right:0,
+     so its child rows inherit full width implicitly. The picker uses
+     dropdown__menu instead, where SearchResultUser's intrinsic width
+     (block default = shrink to fit content / parent flex constraints)
+     leaves the row narrower than the menu — visible as a misaligned
+     active-state background. width:100% pins it. */
+  .picker-typeahead__option :global(.search-input__result-item) {
     width: 100%;
-    background: transparent;
-    cursor: pointer;
-    padding: var(--spacing-2, 0.5rem) var(--spacing-3, 0.75rem);
-    text-align: left;
-    color: inherit;
   }
 
-  .picker-typeahead__option-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
+  /* Keyboard-active highlight — :global() needed because the
+     SearchResultUser markup is rendered inside a child component with
+     scoped styles. Mirrors :hover state from search-input.css so mouse
+     and keyboard navigation feel identical. */
+  .picker-typeahead__option--active :global(.search-input__result-item) {
+    background: var(--glass-bg-active);
+    color: var(--color-text-primary);
   }
 
-  .picker-typeahead__option--active .picker-typeahead__option-btn {
-    background: var(--color-primary-bg, oklch(95% 0.05 250));
-  }
-
-  .picker-typeahead__option--selected .picker-typeahead__option-btn {
-    font-weight: 600;
-  }
-
-  .picker-typeahead__option-label {
-    font-size: 0.875rem;
-  }
-
-  .picker-typeahead__option-sublabel {
-    color: var(--color-text-secondary, oklch(45% 0 0));
-    font-size: 0.75rem;
+  /* Bold the currently-selected entry in single mode so re-clicking is
+     visually distinguishable from a fresh selection. */
+  .picker-typeahead__option--selected :global(.search-input__result-name) {
+    font-weight: 700;
   }
 </style>

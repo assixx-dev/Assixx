@@ -32,6 +32,15 @@ export interface PickerUserRecord {
   email: string;
   position?: string | null;
   role?: string;
+  // Additional fields used by the SearchResultUser-style suggestion row
+  // (DS component, see ADR-017 + design-system/primitives/search-input).
+  // Populated from /users SafeUserResponse: `username`, `employeeNumber`,
+  // `profilePicture`. Optional because EDIT-mode pre-population stubs
+  // (pickerOptionFromIdAndName) don't have them — SearchResultUser falls
+  // back gracefully (initials, no #empno, no avatar image).
+  username?: string;
+  employeeNumber?: string | null;
+  profilePicture?: string | null;
 }
 
 /**

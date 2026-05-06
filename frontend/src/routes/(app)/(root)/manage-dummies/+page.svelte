@@ -56,6 +56,11 @@
 
   const BASE_PATH = '/manage-dummies';
 
+  // Default status filter — must mirror `+page.server.ts` STATUS_FILTER default
+  // (currently `'1'`, IS_ACTIVE.ACTIVE). Stripping this value from the URL
+  // keeps the canonical first-page URL clean (`/manage-dummies`) per ADR-058.
+  const DEFAULT_STATUS_FILTER = 1;
+
   /**
    * Build an href for a target page, preserving current search + status.
    * Used by both numbered page links and prev/next buttons.
@@ -67,7 +72,7 @@
       buildPaginatedHref(BASE_PATH, {
         page: targetPage,
         search: searchTerm,
-        isActive: statusFilter === 'all' ? undefined : String(statusFilter),
+        isActive: statusFilter === DEFAULT_STATUS_FILTER ? undefined : String(statusFilter),
       }),
     );
   }
@@ -83,7 +88,7 @@
       buildPaginatedHref(BASE_PATH, {
         // page omitted → resets to 1
         search: nextSearch,
-        isActive: nextStatus === 'all' ? undefined : String(nextStatus),
+        isActive: nextStatus === DEFAULT_STATUS_FILTER ? undefined : String(nextStatus),
       }),
     );
     void goto(href, { keepFocus: true });
