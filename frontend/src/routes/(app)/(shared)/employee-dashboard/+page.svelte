@@ -103,6 +103,20 @@
   const departmentDeputyLeadName = $derived(user?.departmentDeputyLeadName ?? null);
   const teamLeadName = $derived(user?.teamLeadName ?? null);
   const teamDeputyLeadName = $derived(user?.teamDeputyLeadName ?? null);
+
+  // No-team detection — drives the hint-card fallback below.
+  // WHY: Admin/Root have no user_teams entry by design (ADR-010 — they
+  // manage via has_full_access + admin_*_permissions, never team membership).
+  // Without this fallback, the 3 lead/team cards render empty ('—') after a
+  // role-switch to employee view. Solution: replace with one honest hint card.
+  // Trigger condition is data-driven (teamIds.length === 0), not role-based,
+  // so a brand-new employee without team yet sees the same fallback with a
+  // role-specific message.
+  const hasTeam = $derived((user?.teamIds?.length ?? 0) > 0);
+  const isManagementRole = $derived(user?.role === 'admin' || user?.role === 'root');
+  const noTeamHintMessage = $derived(
+    isManagementRole ? MESSAGES.noTeamHintAdmin : MESSAGES.noTeamHintEmployee,
+  );
 </script>
 
 <svelte:head>
@@ -115,86 +129,102 @@
   <WelcomeHero {employeeName} />
 
   <!-- Employee Info Grid - 4 Stat Cards -->
+  <!-- WHY conditional: Admin/Root have no user_teams entry (ADR-010), so the 3 -->
+  <!-- lead/team cards render '—' after role-switch to employee view. Replace -->
+  <!-- with one honest hint card (col-span-3) instead of fake/empty data. -->
   <div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-    <div class="card-stat">
-      <div class="card-stat__icon">
-        <i class="fas fa-map-marker-alt"></i>
+    {#if hasTeam}
+      <div class="card-stat">
+        <div class="card-stat__icon">
+          <i class="fas fa-map-marker-alt"></i>
+        </div>
+        <div class="card-stat__value">{employeeArea}</div>
+        <div class="card-stat__label">{labels.area}</div>
+        <div class="card-stat__leads">
+          <span
+            class="card-stat__lead"
+            title="Leitung"
+          >
+            <i class="fas fa-user-shield"></i>
+            {areaLeadName ?? '—'}
+          </span>
+          <span
+            class="card-stat__lead card-stat__lead--deputy"
+            title="Stellvertretung"
+          >
+            <i class="fas fa-user-tag"></i>
+            {areaDeputyLeadName ?? '—'}
+          </span>
+        </div>
       </div>
-      <div class="card-stat__value">{employeeArea}</div>
-      <div class="card-stat__label">{labels.area}</div>
-      <div class="card-stat__leads">
-        <span
-          class="card-stat__lead"
-          title="Leitung"
-        >
-          <i class="fas fa-user-shield"></i>
-          {areaLeadName ?? '—'}
-        </span>
-        <span
-          class="card-stat__lead card-stat__lead--deputy"
-          title="Stellvertretung"
-        >
-          <i class="fas fa-user-tag"></i>
-          {areaDeputyLeadName ?? '—'}
-        </span>
+      <div class="card-stat">
+        <div class="card-stat__icon">
+          <i class="fas fa-building"></i>
+        </div>
+        <div class="card-stat__value">{employeeDepartment}</div>
+        <div class="card-stat__label">{labels.department}</div>
+        <div class="card-stat__leads">
+          <span
+            class="card-stat__lead"
+            title="Leitung"
+          >
+            <i class="fas fa-user-shield"></i>
+            {departmentLeadName ?? '—'}
+          </span>
+          <span
+            class="card-stat__lead card-stat__lead--deputy"
+            title="Stellvertretung"
+          >
+            <i class="fas fa-user-tag"></i>
+            {departmentDeputyLeadName ?? '—'}
+          </span>
+        </div>
       </div>
-    </div>
-    <div class="card-stat">
-      <div class="card-stat__icon">
-        <i class="fas fa-building"></i>
+      <div class="card-stat">
+        <div class="card-stat__icon">
+          <i class="fas fa-users"></i>
+        </div>
+        <div class="card-stat__value">
+          {#if employeeTeams !== null}
+            {#each employeeTeams as team (team)}
+              <div>{team}</div>
+            {/each}
+          {:else}
+            {PLACEHOLDER_TEXT.notAssigned}
+          {/if}
+        </div>
+        <div class="card-stat__label">
+          {labels.team}
+        </div>
+        <div class="card-stat__leads">
+          <span
+            class="card-stat__lead"
+            title="Leitung"
+          >
+            <i class="fas fa-user-shield"></i>
+            {teamLeadName ?? '—'}
+          </span>
+          <span
+            class="card-stat__lead card-stat__lead--deputy"
+            title="Stellvertretung"
+          >
+            <i class="fas fa-user-tag"></i>
+            {teamDeputyLeadName ?? '—'}
+          </span>
+        </div>
       </div>
-      <div class="card-stat__value">{employeeDepartment}</div>
-      <div class="card-stat__label">{labels.department}</div>
-      <div class="card-stat__leads">
-        <span
-          class="card-stat__lead"
-          title="Leitung"
-        >
-          <i class="fas fa-user-shield"></i>
-          {departmentLeadName ?? '—'}
-        </span>
-        <span
-          class="card-stat__lead card-stat__lead--deputy"
-          title="Stellvertretung"
-        >
-          <i class="fas fa-user-tag"></i>
-          {departmentDeputyLeadName ?? '—'}
-        </span>
+    {:else}
+      <!-- No-team hint card replaces the 3 empty lead cards. Spans 3 cols on -->
+      <!-- the lg grid so it aligns with the Position card (col 4). Message -->
+      <!-- is role-aware: admin/root → "by design", employee → "contact admin". -->
+      <div class="card-stat flex flex-col justify-center md:col-span-2 lg:col-span-3">
+        <div class="card-stat__icon">
+          <i class="fas fa-info-circle"></i>
+        </div>
+        <div class="card-stat__value">{MESSAGES.noTeamHintTitle}</div>
+        <div class="card-stat__label">{noTeamHintMessage}</div>
       </div>
-    </div>
-    <div class="card-stat">
-      <div class="card-stat__icon">
-        <i class="fas fa-users"></i>
-      </div>
-      <div class="card-stat__value">
-        {#if employeeTeams !== null}
-          {#each employeeTeams as team (team)}
-            <div>{team}</div>
-          {/each}
-        {:else}
-          {PLACEHOLDER_TEXT.notAssigned}
-        {/if}
-      </div>
-      <div class="card-stat__label">
-        {labels.team}
-      </div>
-      <div class="card-stat__leads">
-        <span
-          class="card-stat__lead"
-          title="Leitung"
-        >
-          <i class="fas fa-user-shield"></i>
-          {teamLeadName ?? '—'}
-        </span>
-        <span
-          class="card-stat__lead card-stat__lead--deputy"
-          title="Stellvertretung"
-        >
-          <i class="fas fa-user-tag"></i>
-          {teamDeputyLeadName ?? '—'}
-        </span>
-      </div>
-    </div>
+    {/if}
     <!-- Position card has no __leads sibling like the 3 cards above, -->
     <!-- so flex-center vertically aligns it within the equal-height grid cell. -->
     <div class="card-stat flex flex-col justify-center">

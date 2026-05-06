@@ -70,6 +70,16 @@ export const MESSAGES = {
   profileCardTitle: 'Mein Profil',
   profileButton: 'Profil bearbeiten',
   profileDescription: 'Persönliche Einstellungen verwalten',
+  // No-team hint card (shown when the current user has no user_teams entry).
+  // WHY: Admin/Root users have no team membership by design (ADR-010 — they
+  // manage via has_full_access + admin_*_permissions, not via user_teams).
+  // When they role-switch to employee view, the 3 lead/team cards would be
+  // empty. Replace with a single honest hint card instead of fake data.
+  noTeamHintTitle: 'Keine Team-Zuordnung',
+  noTeamHintAdmin:
+    'Diese Ansicht ist für Mitarbeiter konzipiert. Als Admin/Root haben Sie keine direkte Team-Mitgliedschaft — Sie verwalten via Lead-Positionen und Vollzugriff.',
+  noTeamHintEmployee:
+    'Sie wurden noch keinem Team zugeordnet. Bitte kontaktieren Sie Ihren Administrator.',
 } as const;
 
 /** Priority labels (German) */
