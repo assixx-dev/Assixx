@@ -85,6 +85,7 @@ ADRs document important architectural decisions:
 | [ADR-055](./ADR-055-root-account-lifecycle-protection.md)                    | Root Account Lifecycle Protection                            | Accepted   | 2026-04-28 |
 | [ADR-056](./ADR-056-password-validation-policy.md)                           | Password Validation Policy — Strict 4-of-4 + ASCII-only      | Accepted   | 2026-04-30 |
 | [ADR-057](./ADR-057-department-hall-1to1-hierarchy.md)                       | Department/Team Hall Hierarchy — 1:1 Strict Model            | Accepted   | 2026-05-06 |
+| [ADR-058](./ADR-058-server-driven-pagination.md)                             | Server-Driven Pagination as Canonical List Pattern           | Accepted   | 2026-05-07 |
 
 > **Gap note:** ADR-054 is reserved by `FEAT_2FA_EMAIL_MASTERPLAN.md` for "Mandatory Email-Based 2FA" and will be added on completion of that feature.
 

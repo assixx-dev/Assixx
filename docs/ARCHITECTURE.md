@@ -91,15 +91,16 @@ Most questions about "where is X implemented?" are answered by the tables below.
 
 ### 1.5 Frontend (SvelteKit 5)
 
-| Concept                        | Entry Point                                             | Why / ADR                                                                                                    |
-| ------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Route groups                   | `frontend/src/routes/(app)/` · `(public)/`              | Top split: authenticated vs public                                                                           |
-| Role-based groups              | `(app)/(root)/` · `(app)/(admin)/` · `(app)/(shared)/`  | Fail-closed · [ADR-012](./infrastructure/adr/ADR-012-frontend-route-security-groups.md)                      |
-| Tenant root redirect           | `frontend/src/routes/(app)/+layout.server.ts`           | Loads session, routes by role                                                                                |
-| Design system                  | `frontend/src/design-system/README.md`                  | 29+ components, theme tokens · [ADR-017](./infrastructure/adr/ADR-017-design-system-theming-architecture.md) |
-| Base CSS / Tailwind v4         | `frontend/src/styles/tailwind/base.css`                 | Token source for Tailwind 4                                                                                  |
-| Feature guards (FE)            | `frontend/src/lib/` helpers used in `+layout.server.ts` | Hide UI for missing addons · [ADR-024](./infrastructure/adr/ADR-024-frontend-feature-guards.md)              |
-| CSS scoping (legacy migration) | Masterplan `FEAT_CSS_SCOPING_MASTERPLAN.md`             | Moving from global to scoped styles                                                                          |
+| Concept                        | Entry Point                                                                                                | Why / ADR                                                                                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Route groups                   | `frontend/src/routes/(app)/` · `(public)/`                                                                 | Top split: authenticated vs public                                                                                                                |
+| Role-based groups              | `(app)/(root)/` · `(app)/(admin)/` · `(app)/(shared)/`                                                     | Fail-closed · [ADR-012](./infrastructure/adr/ADR-012-frontend-route-security-groups.md)                                                           |
+| Tenant root redirect           | `frontend/src/routes/(app)/+layout.server.ts`                                                              | Loads session, routes by role                                                                                                                     |
+| Design system                  | `frontend/src/design-system/README.md`                                                                     | 29+ components, theme tokens · [ADR-017](./infrastructure/adr/ADR-017-design-system-theming-architecture.md)                                      |
+| Base CSS / Tailwind v4         | `frontend/src/styles/tailwind/base.css`                                                                    | Token source for Tailwind 4                                                                                                                       |
+| Feature guards (FE)            | `frontend/src/lib/` helpers used in `+layout.server.ts`                                                    | Hide UI for missing addons · [ADR-024](./infrastructure/adr/ADR-024-frontend-feature-guards.md)                                                   |
+| Server-driven pagination       | `frontend/src/lib/server/api-fetch.ts` (`apiFetchPaginated*`) · `frontend/src/lib/utils/url-pagination.ts` | URL-state list pattern · [ADR-058](./infrastructure/adr/ADR-058-server-driven-pagination.md) · [HOW-TO](./how-to/HOW-TO-FIX-MANAGE-PAGINATION.md) |
+| CSS scoping (legacy migration) | Masterplan `FEAT_CSS_SCOPING_MASTERPLAN.md`                                                                | Moving from global to scoped styles                                                                                                               |
 
 ### 1.6 Data Layer
 

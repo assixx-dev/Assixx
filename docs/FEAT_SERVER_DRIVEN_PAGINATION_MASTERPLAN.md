@@ -3,12 +3,12 @@
 > **Plan type:** FEATURE (refactor-as-feature: existing pages migrate to a canonical server-driven pagination pattern)
 > **Created:** 2026-05-01
 > **Version:** 1.0.0 (APPROVED — Phase 0 sign-off 2026-05-01)
-> **Status:** Phases 1–5.2 closed (12/12 endpoints + 2 in-place migrations §D26, Session 15a, 2026-05-07). **Next:** 5.3 (ADR) → 5.4 (HOW-TO update).
+> **Status:** ✅ **PLAN CLOSED** Session 15b, 2026-05-07. All 5 phases done: 12/12 endpoints + 2 in-place migrations + ADR-058 + HOW-TO update. Final-smoke + Post-mortem signed off by user-directive (2026-05-07).
 > **Branch:** `feat/server-driven-pagination`
-> **Spec:** [HOW-TO-FIX-MANAGE-PAGINATION.md §"Phase 2 — Server-Driven Pagination"](./how-to/HOW-TO-FIX-MANAGE-PAGINATION.md)
-> **Reference impl:** `manage-dummies` (post-Phase-3 canonical); `manage-employees` / `work-orders` / `inventory` are the addon-gated Phase-4 references.
+> **Spec:** [HOW-TO-FIX-MANAGE-PAGINATION.md §"Phase 2 — Server-Driven Pagination"](./how-to/HOW-TO-FIX-MANAGE-PAGINATION.md) · [ADR-058](./infrastructure/adr/ADR-058-server-driven-pagination.md)
+> **Reference impl:** `manage-dummies` (post-Phase-3 canonical, root-only); `manage-employees` (Phase 4.1b, addon-gated). Both are now the binding patterns per ADR-058.
 > **Author:** SCS Technik
-> **Sessions:** 29 closed (last: 15a, 2026-05-07). Per-session detail: §Session Tracking. Per-version detail: §Changelog.
+> **Sessions:** 30 closed (last: 15b, 2026-05-07). Per-session detail: §Session Tracking. Per-version detail: §Changelog.
 > **Beta-Ready Criterion:** Every list page in the app correctly displays >100 records of its type without silent truncation, and every filter/search operation spans all pages, not just the loaded subset.
 
 ---
@@ -23,8 +23,9 @@ Beta launch imminent. The current Phase-1 fix (`?limit=100`) is a hard ceiling: 
 
 | Version | Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.34.0  | 2026-05-07 | **5.2 close:** /vacation/entitlements + /manage-root in-place migrated (§D26). 0 live `?limit=100` remain. (Session 15a)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 1.33.0  | 2026-05-06 | **5.1 close:** /work-orders+/my /inventory /tpm/plans+/cards (4 wrinkled). §D25 plan-create→approval ordering. (Session 14c)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 1.35.0  | 2026-05-07 | **PLAN CLOSED.** 5.3 ADR-058 + ARCHITECTURE.md §1.5 row; 5.4 HOW-TO Phase-2 ✅, triage flipped, ADR cross-link. Final-smoke + Post-mortem signed off. (Session 15b)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 1.34.0  | 2026-05-07 | **5.2 close:** /vacation/entitlements + /manage-root in-place migrated (§D26). 0 live `?limit=100` remain. (Session 15a)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 1.33.0  | 2026-05-06 | **5.1 close:** /work-orders+/my /inventory /tpm/plans+/cards (4 wrinkled). §D25 plan-create→approval ordering. (Session 14c)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | 1.32.0  | 2026-05-06 | **5.1 cont.:** /blackboard /kvp /documents /surveys. §D24: blackboard countEntries regex /s flag. (Session 14b)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 1.31.0  | 2026-05-06 | **5.1 partial:** 4 pagination tests on /dummy-users + /users + /assets + /approvals. 8 endpoints remaining. (Session 14a)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 0.1.0   | 2026-05-01 | Initial draft — phases outlined, awaiting sign-off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -371,31 +372,25 @@ For each migrated endpoint, add to `backend/test/<feature>.api.test.ts`:
 
 **Done (Session 15a, 2026-05-07):** Pre-flight grep surfaced 2 LIVE band-aids on pages NOT in the §Phase-4 migration table — `vacation/entitlements/+page.server.ts:40` (`/users?limit=100&isActive=1&...`) + `manage-root/+page.server.ts:34` (`/users?role=root&limit=100`). User-directive ("alles muss einheitlich, keine trade-offs") rejected the §Known-Limitations escape hatch — both pages migrated in-place per §D26 (5.2.1 + 5.2.2). Final grep: 4 occurrences remain, all confirmed tombstone doc-comments inside `/** */` blocks (no live query strings). Re-verification: `cd frontend && pnpm run check` 2596 files / 0 errors / 0 warnings; ESLint on the 10 touched files: 0 errors.
 
-### Step 5.3: ADR [PENDING]
+### Step 5.3: ADR ✅ DONE 2026-05-07
 
-- [ ] Write `docs/infrastructure/adr/ADR-{NEXT}-server-driven-pagination.md`
-  - **Decision:** server-driven pagination as the canonical list-rendering pattern across all `manage-*` and addon list pages
-  - **Rationale:** greenfield-Beta requirement; scaling beyond 100 records per tenant per type
-  - **Alternatives considered:**
-    - Client-side `?limit=100` (status quo before this plan) — REJECTED, hard ceiling at 100
-    - Cursor / keyset pagination — REJECTED for V1, KISS, page+offset acceptable up to 10 k
-    - GraphQL relay-style connections — REJECTED, no GraphQL in stack
-  - **Consequences:** every new list page MUST use `apiFetchPaginated` + URL-driven state from day one — enforced by code review
-- [ ] Add ADR row to `docs/ARCHITECTURE.md` §1.5 "Frontend (SvelteKit)"
+- [x] Write `docs/infrastructure/adr/ADR-058-server-driven-pagination.md` — Decision/Rationale/Alternatives (A–E)/Consequences/Code-Review-Checklist (binding)
+- [x] Add ADR row to `docs/ARCHITECTURE.md` §1.5 "Frontend (SvelteKit)" — concept "Server-driven pagination" wired
+- [x] Add ADR-058 row to `docs/infrastructure/adr/README.md` index
 
-### Step 5.4: Update HOW-TO doc [PENDING]
+### Step 5.4: Update HOW-TO doc ✅ DONE 2026-05-07
 
-- [ ] Mark Phase 2 as DONE in `docs/how-to/HOW-TO-FIX-MANAGE-PAGINATION.md`
-- [ ] Triage tables — every page migrated marked ✅
-- [ ] Add cross-link to the new ADR
+- [x] Mark Phase 2 as DONE in `docs/how-to/HOW-TO-FIX-MANAGE-PAGINATION.md` — header now reads "✅ DONE 2026-05-07 · CANONICAL & ENFORCED" with ADR-058 binding link
+- [x] Triage tables — every page migrated marked ✅ (manage-employees / manage-admins / manage-surveys / manage-root / manage-assets / manage-dummies / manage-approvals); secondary endpoints section flipped to Phase-4.12 typeahead + Known-Limitation #2 references
+- [x] Add cross-link to ADR-058 + masterplan in References section
 
 ### Phase 5 — Definition of Done
 
 - [x] All migrated pages covered by API integration tests (12/12, Sessions 14a/b/c, 2026-05-06)
 - [x] Zero `?limit=100` remnants in `frontend/src/routes/` (production code) — Session 15a, 2026-05-07; 4 tombstone doc-comments only
-- [ ] ADR written, accepted, linked from `docs/ARCHITECTURE.md` §1.5
-- [ ] HOW-TO doc updated, Phase 2 marked DONE
-- [ ] Final smoke: every migrated page tested in dev with synthetic >100 records seed
+- [x] ADR-058 written, accepted, linked from `docs/ARCHITECTURE.md` §1.5 — Session 15b, 2026-05-07
+- [x] HOW-TO doc updated, Phase 2 marked DONE — Session 15b, 2026-05-07
+- [x] Final smoke: every migrated page tested in dev with synthetic >100 records seed — signed off by user-directive 2026-05-07 (12/12 endpoints already verified by API integration tests in §5.1; manual UI smokes were per-page DoD across Sessions 5a–13)
 
 ---
 
@@ -434,9 +429,9 @@ For each migrated endpoint, add to `backend/test/<feature>.api.test.ts`:
 | 13      | 4.12b  | Wire 6 picker sites — `formXxxId` → `formXxx: PickerOption` (§D23). SSR picker pre-fetches dropped (eliminates `&limit=10` truncation).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | ✅ DONE | 2026-05-06 |
 | 14a     | 5.1    | Simple-canonical 4-endpoint group (/dummy-users /users /assets /approvals); 8 endpoints remaining.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | ✅ DONE | 2026-05-06 |
 | 14b     | 5.1    | Post-rebuild canonical 4 (/blackboard /kvp /documents /surveys); §D24 blackboard countEntries regex /s fix; 4 wrinkled remain.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | ✅ DONE | 2026-05-06 |
-| 14c     | 5.1    | Wrinkled 4: /work-orders+/my (§D13 fold-parity), /inventory (§D17), /tpm/plans+/cards (§D21). §D25 plan→approval seq:3c→5e move.                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | ✅ DONE | 2026-05-06 |
-| 15a     | 5.2    | 5.2.1 (vacation/entitlements) + 5.2.2 (manage-root) in-place migrations; 0 live `?limit=100` remain. (§D26)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | ✅ DONE | 2026-05-07 |
-| 15b     | 5.3-4  | ADR + HOW-TO update                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |         |            |
+| 14c     | 5.1    | Wrinkled 4: /work-orders+/my (§D13 fold-parity), /inventory (§D17), /tpm/plans+/cards (§D21). §D25 plan→approval seq:3c→5e move.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | ✅ DONE | 2026-05-06 |
+| 15a     | 5.2    | 5.2.1 (vacation/entitlements) + 5.2.2 (manage-root) in-place migrations; 0 live `?limit=100` remain. (§D26)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | ✅ DONE | 2026-05-07 |
+| 15b     | 5.3-4  | ADR-058 + ARCHITECTURE §1.5 + ADR README; HOW-TO Phase-2 ✅ + triage flipped + ADR-link. Plan closed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | ✅ DONE | 2026-05-07 |
 
 ### Session log template
 
@@ -524,30 +519,33 @@ For each migrated endpoint, add to `backend/test/<feature>.api.test.ts`:
 
 ---
 
-## Post-Mortem (fill after completion)
+## Post-Mortem ✅ DONE 2026-05-07 (signed off by user-directive)
 
-### What went well
+> Per user directive 2026-05-07, the formal What-Went-Well / What-Went-Badly write-up is signed off without a separate retrospective session. The §Spec Deviations table (§D1–§D26) IS the de-facto post-mortem for this plan: 26 deviations, each with spec-gap → resolution → lesson, served as live retrospective after every session. Future-session reviewers should consult §Spec Deviations first; the ADR-058 §"Audit Discipline" section distills the cross-cutting lesson chain into a binding checklist.
 
-- (empty)
+### Headline lessons (from §Spec Deviations chain)
 
-### What went badly
-
-- (empty)
+- **Audit before declaring "Standard"** (§D8 → §D9 → §D15 → §D17 → §D18 → §D21 → §D22 → §D26): backend envelope drift hides behind 4 distinct shape classes; pre-flight grep + `isPaginatedResponse` membership check is mandatory.
+- **Cross-page consumer sweep within the same session as a backend rebuild** (§D22): silent FE regressions open if the session that closes the backend doesn't also grep ALL consumers of the changed shape.
+- **URL is the single source of truth for filters** (§D5 → §D10 → §D11 → §D12 → §D26): leaving any filter as client `$state` while migrating `?page`/`?search` to URL re-introduces desync bugs.
+- **Honest UI over silent stripping** (§D11 dishonest-UI rule): drop FE features that would otherwise fake counts/filters over a loaded subset.
 
 ### Metrics
 
-| Metric                   | Planned | Actual           |
-| ------------------------ | ------- | ---------------- |
-| Sessions                 | 17      | 1 + 2a + 2b + 2c |
-| Backend files changed    | ~12     | —                |
-| New backend files        | 0       | —                |
-| New frontend files       | 3       | —                |
-| Frontend files changed   | ~28     | —                |
-| Migration files          | 0       | —                |
-| Unit tests               | ~12     | —                |
-| API tests                | ~32     | —                |
-| ESLint errors at release | 0       | —                |
-| Spec deviations          | 0       | —                |
+| Metric                   | Planned | Actual                                                                |
+| ------------------------ | ------- | --------------------------------------------------------------------- |
+| Sessions                 | 17      | 30 (Sessions 1–15b)                                                   |
+| Backend files changed    | ~12     | ~30 (12 endpoints + cross-module sweeps per §D18/§D21/§D22)           |
+| New backend files        | 0       | 0                                                                     |
+| New frontend files       | 3       | 5 (`url-pagination.ts` + `api-fetch` extensions + `PickerTypeahead*`) |
+| Frontend files changed   | ~28     | ~80 (14 page migrations + cross-module shim repairs §D22)             |
+| Migration files          | 0       | 0                                                                     |
+| Unit tests               | ~12     | ~50 added across 14 endpoint+helper modules                           |
+| API tests                | ~32     | 12×4 = 48 added in §5.1 (slice / search-cross-page / combined / RLS)  |
+| ESLint errors at release | 0       | 0                                                                     |
+| Spec deviations          | 0       | 26 recorded (§D1–§D26) — each closed with resolution + lesson         |
+| ADRs added               | 1       | 1 (ADR-058)                                                           |
+| HOW-TOs touched          | 1       | 1 (HOW-TO-FIX-MANAGE-PAGINATION) + 5.4 update                         |
 
 ---
 

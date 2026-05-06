@@ -74,22 +74,20 @@ Sorted by severity (largest data loss first). Backend defaults verified by inspe
 
 ### High — silent data loss possible
 
-| Page                  | Endpoint               | Backend Default                 | DB Count (T1) | Status                        |
-| --------------------- | ---------------------- | ------------------------------- | ------------- | ----------------------------- |
-| ✅ `manage-employees` | `/users?role=employee` | 10                              | 82 active     | **fixed**                     |
-| ✅ `manage-admins`    | `/users?role=admin`    | 10                              | 3             | **fixed**                     |
-| 🟡 `manage-surveys`   | `/surveys`             | 10 (extends `PaginationSchema`) | —             | **Phase 1 fixed** (see below) |
-| ✅ `manage-root`      | `/users?role=root`     | 10                              | 1 per tenant  | **fixed**                     |
-
-> **`manage-surveys` deviates from the canonical 4-step pattern.** The page renders three status sections (Active, Completed, Drafts) as card grids plus a Templates section — there is no single table to swap `filteredFoos` → `paginatedFoos` into. Phase 1 applied only Step 1 (`?limit=100` on `/surveys`) which closes the silent-truncation bug. Phase 2 (per-section pagination UI) is deferred until a tenant report shows the Completed section growing past ~25 entries; Active/Drafts are typically too small to need pagination, and Templates come from a separate endpoint (`/surveys/templates`).
+| Page                  | Endpoint               | Backend Default                 | DB Count (T1) | Status                                                           |
+| --------------------- | ---------------------- | ------------------------------- | ------------- | ---------------------------------------------------------------- |
+| ✅ `manage-employees` | `/users?role=employee` | 10                              | 82 active     | **Phase 2 done** (Phase 4.1, addon-gated reference impl)         |
+| ✅ `manage-admins`    | `/users?role=admin`    | 10                              | 3             | **Phase 2 done** (Phase 4.2, root-only reference impl)           |
+| ✅ `manage-surveys`   | `/surveys`             | 10 (extends `PaginationSchema`) | —             | **Phase 2 done** (Phase 4.10, three-section pivot + §D20 merger) |
+| ✅ `manage-root`      | `/users?role=root`     | 10                              | 1 per tenant  | **Phase 2 done** (Phase 5.2.2, in-place migration §D26)          |
 
 ### Medium — already paginated, verify UI presence
 
-| Page                  | Endpoint                                                | Backend Default | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------- | ------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅ `manage-assets`    | `/assets`                                               | 20              | **fixed** (`&limit=100` + UI)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ✅ `manage-dummies`   | `/dummy-users` (URL-driven `?page=N&search=&isActive=`) | 20 (FE caller)  | **canonical reference impl** (Phase 2 + 3, 2026-05-04). Pre-Phase-3 this row claimed "server-paginated" but the page hardcoded `?page=1` in `+page.server.ts` and the backend response shape `{ items, total, pageSize }` violated ADR-007. Phase 3 rebuilt both layers: backend now returns `{ items, pagination: { page, limit, total, totalPages } }` (interceptor wraps to ADR-007 envelope) and FE reads `?page`/`?search`/`?isActive` from the URL via the helpers in `frontend/src/lib/utils/url-pagination.ts`. See [masterplan §Phase 3](../FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md#phase-3-reference-implementation--rebuild-not-polish). |
-| ⚠️ `manage-approvals` | `/approvals?page=1&limit=20`                            | 20 (sent)       | **needs Phase 4.3 verification.** Originally claimed "fixed, mirrors `manage-dummies`", but pre-Phase-3 `manage-dummies` was broken (`page=1` hardcoded + non-canonical envelope). Phase 4.3 must verify whether `manage-approvals` is broken-by-mirror; if yes, full Phase-2 rebuild required (URL-state migration + backend envelope conformance check). See [masterplan §4.3](../FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md#migration-order-priority-by-beta-blast-radius).                                                                                                                                                                         |
+| Page                  | Endpoint                                                | Backend Default | Notes                                                                                                                                                                                                                                                                                          |
+| --------------------- | ------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅ `manage-assets`    | `/assets`                                               | 20              | **Phase 2 done** (Phase 4.4, broken-not-paginated §D8 — full backend rebuild)                                                                                                                                                                                                                  |
+| ✅ `manage-dummies`   | `/dummy-users` (URL-driven `?page=N&search=&isActive=`) | 20 (FE caller)  | **canonical reference impl** (Phase 3, 2026-05-04). Backend returns `{ items, pagination: { page, limit, total, totalPages } }` (interceptor wraps to ADR-007 envelope) and FE reads `?page`/`?search`/`?isActive` from the URL via the helpers in `frontend/src/lib/utils/url-pagination.ts`. |
+| ✅ `manage-approvals` | `/approvals` (URL-driven)                               | 20 (sent)       | **Phase 2 done** (Phase 4.3, broken-by-mirror — full rebuild)                                                                                                                                                                                                                                  |
 
 ### Low — backend has no pagination (no truncation, but UX consistency open)
 
@@ -108,22 +106,22 @@ For the Low tier: pagination is **not required** for correctness. Add only if a 
 
 These calls also hit `PaginationSchema` (default 10) and feed dropdown options inside modals. Default-truncation here means **leads/team-members vanish from selectors**:
 
-| Caller                               | Endpoint                                          | Risk                                       |
-| ------------------------------------ | ------------------------------------------------- | ------------------------------------------ |
-| `manage-areas`, `manage-departments` | `/users?role=admin&isActive=1&position=area_lead` | Misses lead-eligible admins after the 10th |
-| `manage-areas`, `manage-departments` | `/users?role=root&isActive=1&position=area_lead`  | Misses lead-eligible roots after the 10th  |
-| `manage-teams`                       | `/users?isActive=1&position=team_lead`            | Misses team-lead candidates                |
-| `manage-teams`                       | `/users?role=employee`                            | Misses employees in team-member assignment |
+| Caller                               | Endpoint                                          | Status                                                                                             |
+| ------------------------------------ | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `manage-areas`, `manage-departments` | `/users?role=admin&isActive=1&position=area_lead` | `&limit=100` ceiling — Known Limit. #2 (volumes structurally <100; rejected typeahead — see §4.12) |
+| `manage-areas`, `manage-departments` | `/users?role=root&isActive=1&position=area_lead`  | `&limit=100` ceiling — Known Limit. #2                                                             |
+| `manage-teams`                       | `/users?isActive=1&position=team_lead`            | `&limit=100` ceiling — Known Limit. #2                                                             |
+| `manage-teams`                       | `/users?role=employee`                            | **Phase 4.12 done** — `PickerTypeahead` (debounced `?search=…`, no ceiling) replaces the band-aid  |
 
-**Fix:** append `&limit=100` to every such call. One-line edit per occurrence.
+**Pattern for new pickers:** reuse `frontend/src/lib/components/PickerTypeahead.svelte` with the appropriate `?role=…&position=…` query — no `&limit=100` band-aid.
 
 ---
 
-## Phase 2 — Server-Driven Pagination
+## Phase 2 — Server-Driven Pagination ✅ DONE 2026-05-07
 
-> **Status:** **CANONICAL** as of 2026-05-04. Reference impl: `frontend/src/routes/(app)/(root)/manage-dummies/` + `backend/src/nest/dummy-users/`. Every Phase-4 migration in [FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN](../FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md) §4 copies this pattern verbatim.
+> **Status:** **CANONICAL & ENFORCED** as of 2026-05-07 (plan closed Session 15b). Pattern is now binding for every new list page — see [ADR-058](../infrastructure/adr/ADR-058-server-driven-pagination.md). Reference impls: `frontend/src/routes/(app)/(root)/manage-dummies/` + `backend/src/nest/dummy-users/` (canonical, root-only) and `frontend/src/routes/(app)/(shared)/manage-employees/` + `/users` endpoint (canonical, addon-gated). All 12 list endpoints + 2 in-place migrations from [FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN](../FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md) §4 + §5.2 copy this pattern verbatim.
 >
-> **Trigger to migrate:** any list page where (a) a tenant can realistically exceed 100 records of the listed type, OR (b) a filter/search must span all pages.
+> **Default for new pages:** every new list page MUST adopt this pattern from day one — no "Phase-1 client-side band-aid as starting point" path is allowed. ADR-058's code-review checklist is binding.
 
 The Phase-1 `&limit=100` band-aid above is a hard ceiling — silently truncates at the 101st record AND leaves search/filter operating only on the loaded subset. Phase 2 fixes both: backend ships the canonical ADR-007 envelope, FE reads `?page` / `?search` / any filter from the URL.
 
@@ -343,3 +341,5 @@ All three must pass with 0 errors. Manual smoke (per masterplan per-page DoD §4
 - `frontend/src/design-system/primitives/navigation/pagination.css` — markup reference
 - [ADR-007: API Response Standardization](../infrastructure/adr/ADR-007-api-response-standardization.md)
 - [ADR-030: Zod Validation Architecture](../infrastructure/adr/ADR-030-zod-validation-architecture.md)
+- [ADR-058: Server-Driven Pagination as Canonical List Pattern](../infrastructure/adr/ADR-058-server-driven-pagination.md) — binding pattern + code-review checklist
+- [FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN](../FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md) — execution masterplan (29 sessions, audit + 12 backend rebuilds + 14 FE migrations + 12 API tests + ADR + HOW-TO)
