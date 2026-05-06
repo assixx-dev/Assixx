@@ -47,8 +47,24 @@ function numberOr(val: unknown, fallback: number): number {
   return typeof val === 'number' ? val : fallback;
 }
 
-/** Type-safe extraction of paginated data from API response */
+/**
+ * Type-safe extraction of paginated data from API response.
+ *
+ * Handles three shapes (Phase 4.11b, 2026-05-06):
+ * 1. **Canonical post-4.11a** — `apiClient.get` already lifted `meta.pagination`,
+ *    so `result` arrives as a flat `T[]`. Total is unknowable here (the
+ *    pagination block is gone) — `result.length` is honest for the loaded
+ *    page; consumers that need the true total should use the SSR
+ *    `apiFetchPaginated` helper, which preserves `meta.pagination`.
+ * 2. **Legacy `{data, total, page, pageSize}`** — TPM executions/defects (still
+ *    deferred per Known Limitation #12).
+ * 3. **Legacy `{items, total, page, pageSize}`** — pre-4.11a tpm/plans + cards.
+ */
 function extractPaginated<T>(result: unknown): PaginatedResponse<T> {
+  if (Array.isArray(result)) {
+    const items = result as T[];
+    return { items, total: items.length, page: 1, limit: items.length };
+  }
   if (result === null || typeof result !== 'object') return EMPTY_PAGE;
   const obj = result as Record<string, unknown>;
   const items =

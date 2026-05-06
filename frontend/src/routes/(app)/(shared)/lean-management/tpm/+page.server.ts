@@ -2,23 +2,31 @@
  * TPM Dashboard - Server-Side Data Loading
  * @module lean-management/tpm/+page.server
  *
- * SSR: Loads maintenance plans + color config + user permissions in parallel.
+ * SSR: Loads paginated maintenance plans + color config + interval matrix +
+ * permissions in parallel. URL-state-driven pagination.
+ *
+ * Phase 4.11b (2026-05-06): URL-state migration via `apiFetchPaginatedWithPermission`
+ * (§D6). URL contract: `?page` + `?search` (verbatim mirror of backend
+ * `ListPlansQuerySchema` per §D5). The `?isActive` filter dropped — backend
+ * `ListPlansQuerySchema` has no `isActive` field; client-side filtering over a
+ * paginated subset would be the §D5/§D10/§D11/§D12 dishonest-UI pattern.
+ * Recorded as Known Limitation #13.
+ *
  * Access: Root | Admin (scoped) | Employee Team-Lead
+ *
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Migration order" row 4.11
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Spec Deviations" D6, D21, D22
  */
 import { redirect } from '@sveltejs/kit';
 
-import { apiFetch, apiFetchWithPermission } from '$lib/server/api-fetch';
+import { apiFetch, apiFetchPaginatedWithPermission } from '$lib/server/api-fetch';
 import { assertTeamLevelAccess } from '$lib/server/manage-page-access';
 import { requireAddon } from '$lib/utils/addon-guard';
 import { buildLoginUrl } from '$lib/utils/build-apex-url';
+import { readPageFromUrl, readSearchFromUrl } from '$lib/utils/url-pagination';
 
 import type { PageServerLoad } from './$types';
-import type {
-  TpmPlan,
-  TpmColorConfigEntry,
-  IntervalMatrixEntry,
-  PaginatedResponse,
-} from './_admin/types';
+import type { TpmPlan, TpmColorConfigEntry, IntervalMatrixEntry } from './_admin/types';
 
 /** User's effective TPM permissions (mirrors backend TpmMyPermissions) */
 interface TpmMyPermissions {
@@ -29,18 +37,26 @@ interface TpmMyPermissions {
   locations: { canRead: boolean; canWrite: boolean; canDelete?: boolean };
 }
 
-/** Extract plans array from the paginated API response */
-function extractPlans(raw: Record<string, unknown> | null): {
-  plans: TpmPlan[];
-  total: number;
-} {
-  if (raw === null) return { plans: [], total: 0 };
+/** URL-state read once at the top of `load()` and threaded to the page. */
+export interface DashboardUrlState {
+  page: number;
+  search: string;
+}
 
-  const items = Array.isArray(raw.data) ? raw.data : raw.items;
-  const plans = Array.isArray(items) ? (items as TpmPlan[]) : [];
-  const total = typeof raw.total === 'number' ? raw.total : 0;
+function readUrlState(url: URL): DashboardUrlState {
+  return {
+    page: readPageFromUrl(url),
+    search: readSearchFromUrl(url),
+  };
+}
 
-  return { plans, total };
+/** Build backend `URLSearchParams` from URL state — emits only non-default values. */
+function buildBackendParams(state: DashboardUrlState): URLSearchParams {
+  const params = new URLSearchParams();
+  params.set('page', String(state.page));
+  params.set('limit', '20');
+  if (state.search !== '') params.set('search', state.search);
+  return params;
 }
 
 export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
@@ -53,8 +69,11 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
   assertTeamLevelAccess(orgScope, { role: user?.role, pathname: url.pathname });
   requireAddon(activeAddons, 'tpm');
 
-  const plansResult = await apiFetchWithPermission<PaginatedResponse<TpmPlan>>(
-    '/tpm/plans?page=1&limit=20',
+  const urlState = readUrlState(url);
+  const backendParams = buildBackendParams(urlState);
+
+  const plansResult = await apiFetchPaginatedWithPermission<TpmPlan>(
+    `/tpm/plans?${backendParams.toString()}`,
     token,
     fetch,
   );
@@ -63,29 +82,28 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
     return {
       permissionDenied: true as const,
       plans: [] as TpmPlan[],
-      totalPlans: 0,
+      pagination: plansResult.pagination,
       colors: [] as TpmColorConfigEntry[],
       intervalMatrix: [] as IntervalMatrixEntry[],
       permissions: null as TpmMyPermissions | null,
+      urlState,
     };
   }
 
+  // Sibling fetches run in parallel — independent of permission gate result.
   const [colorsData, matrixData, permissionsData] = await Promise.all([
     apiFetch<TpmColorConfigEntry[]>('/tpm/config/colors', token, fetch),
     apiFetch<IntervalMatrixEntry[]>('/tpm/plans/interval-matrix', token, fetch),
     apiFetch<TpmMyPermissions>('/tpm/plans/my-permissions', token, fetch),
   ]);
 
-  const { plans, total: totalPlans } = extractPlans(
-    plansResult.data as Record<string, unknown> | null,
-  );
-
   return {
     permissionDenied: false as const,
-    plans,
-    totalPlans,
+    plans: plansResult.data,
+    pagination: plansResult.pagination,
     colors: Array.isArray(colorsData) ? colorsData : [],
     intervalMatrix: Array.isArray(matrixData) ? matrixData : [],
     permissions: permissionsData,
+    urlState,
   };
 };

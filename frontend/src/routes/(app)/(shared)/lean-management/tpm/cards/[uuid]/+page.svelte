@@ -4,14 +4,18 @@
    * @module lean-management/tpm/cards/[uuid]/+page
    *
    * The [uuid] param is the plan UUID.
-   * Shows card list for the plan with inline create/edit form.
-   * Handles: CRUD, duplicate check, delete confirmation.
+   * Phase 4.11b (2026-05-06): URL-state-driven. Search input + pagination
+   * block ADDED — both were absent pre-migration (cards silently truncated
+   * at hardcoded `limit=50`).
+   *
+   * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Per-Page Definition of Done"
    */
   import { goto, invalidateAll } from '$app/navigation';
   import { resolve } from '$app/paths';
 
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
   import { showSuccessAlert, showErrorAlert } from '$lib/stores/toast';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   import ConfirmModal from '$design-system/components/confirm-modal/ConfirmModal.svelte';
 
@@ -29,7 +33,18 @@
   import DuplicateWarning from './_lib/DuplicateWarning.svelte';
 
   import type { PageData } from './$types';
-  import type { TpmCard, CreateCardPayload, UpdateCardPayload } from '../../_admin/types';
+  import type {
+    TpmCard,
+    CreateCardPayload,
+    UpdateCardPayload,
+    CardStatus,
+    IntervalType,
+    CardRole,
+  } from '../../_admin/types';
+
+  type StatusFilterValue = CardStatus | '';
+  type IntervalFilterValue = IntervalType | '';
+  type RoleFilterValue = CardRole | '';
 
   // ===========================================================================
   // SSR DATA
@@ -38,12 +53,92 @@
   const { data }: { data: PageData } = $props();
   const permissionDenied = $derived(data.permissionDenied);
 
-  // Hierarchy labels from layout data inheritance (A6)
   const labels = $derived(data.hierarchyLabels);
   const messages = $derived(createTpmMessages(labels));
 
+  const cards = $derived(data.cards);
+  const pagination = $derived(data.pagination);
+  const urlState = $derived(data.urlState);
+  const totalCards = $derived(pagination.total);
+
   // ===========================================================================
-  // STATE
+  // URL NAVIGATION
+  // ===========================================================================
+
+  const basePath = $derived(`/lean-management/tpm/cards/${data.planUuid}`);
+
+  function buildHref(updates: {
+    page?: number;
+    search?: string;
+    status?: StatusFilterValue;
+    intervalType?: IntervalFilterValue;
+    cardRole?: RoleFilterValue;
+  }): string {
+    return resolve(
+      buildPaginatedHref(basePath, {
+        page: updates.page ?? 1,
+        search: updates.search ?? urlState.search,
+        status: updates.status ?? urlState.status,
+        intervalType: updates.intervalType ?? urlState.intervalType,
+        cardRole: updates.cardRole ?? urlState.cardRole,
+      }),
+    );
+  }
+
+  function pageHref(page: number): string {
+    return resolve(
+      buildPaginatedHref(basePath, {
+        page,
+        search: urlState.search,
+        status: urlState.status,
+        intervalType: urlState.intervalType,
+        cardRole: urlState.cardRole,
+      }),
+    );
+  }
+
+  function navigate(updates: {
+    page?: number;
+    search?: string;
+    status?: StatusFilterValue;
+    intervalType?: IntervalFilterValue;
+    cardRole?: RoleFilterValue;
+  }): void {
+    void goto(buildHref(updates), { keepFocus: true, noScroll: true });
+  }
+
+  function handleFilterChange(updates: {
+    status?: StatusFilterValue;
+    intervalType?: IntervalFilterValue;
+    cardRole?: RoleFilterValue;
+  }): void {
+    navigate({ ...updates, page: 1 });
+  }
+
+  // ===========================================================================
+  // SEARCH — debounced URL update (300ms, mirrors work-orders pattern)
+  // ===========================================================================
+
+  let searchInput = $derived(urlState.search);
+  let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  function handleSearchInput(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    searchInput = target.value;
+    if (searchDebounce !== null) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      navigate({ search: searchInput.trim() });
+    }, 300);
+  }
+
+  function handleSearchSubmit(event: SubmitEvent): void {
+    event.preventDefault();
+    if (searchDebounce !== null) clearTimeout(searchDebounce);
+    navigate({ search: searchInput.trim() });
+  }
+
+  // ===========================================================================
+  // FORM STATE — local UI state, mutations use invalidateAll
   // ===========================================================================
 
   let showForm = $state(false);
@@ -58,10 +153,6 @@
   let showDuplicateWarning = $state(false);
   let duplicateCards = $state<TpmCard[]>([]);
   let pendingPayload = $state<CreateCardPayload | null>(null);
-
-  // ===========================================================================
-  // DERIVED
-  // ===========================================================================
 
   const isCreateMode = $derived(editingCard === null);
   const formHeading = $derived(
@@ -88,7 +179,6 @@
   // ===========================================================================
 
   async function handleCreate(payload: CreateCardPayload): Promise<void> {
-    // Run duplicate check first
     try {
       const result = await apiCheckDuplicate({
         planUuid: payload.planUuid,
@@ -195,6 +285,10 @@
     pendingPayload = null;
     duplicateCards = [];
   }
+
+  const pageRange = $derived(
+    Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1),
+  );
 </script>
 
 <svelte:head>
@@ -279,69 +373,111 @@
       <!-- Card List -->
       <div class="card">
         <div class="card__header">
-          <h2
-            class="card__title"
-            style="display: flex; align-items: center; gap: 0.625rem;"
-          >
-            Karten ({data.totalCards})
-            <svg
-              width="22"
-              height="30"
-              viewBox="0 0 32 42"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true"
-              style="flex-shrink: 0; align-self: center; margin-top: 2px; color: #22c55e;"
-            >
-              <rect
-                x="1"
-                y="1"
-                width="30"
-                height="40"
-                rx="5"
-                fill="currentColor"
-                opacity="0.15"
-                stroke="currentColor"
-                stroke-width="2"
-              />
-              <rect
-                x="3"
-                y="3"
-                width="26"
-                height="13"
-                rx="4"
-                fill="currentColor"
-                opacity="0.7"
-              />
-              <rect
-                x="6"
-                y="22"
-                width="18"
-                height="2.5"
-                rx="1.25"
-                fill="currentColor"
-                opacity="0.45"
-              />
-              <rect
-                x="6"
-                y="28"
-                width="13"
-                height="2.5"
-                rx="1.25"
-                fill="currentColor"
-                opacity="0.3"
-              />
-            </svg>
+          <h2 class="card__title">
+            Karten ({totalCards})
           </h2>
         </div>
         <div class="card__body">
+          <!-- Search bar — Phase 4.11b: backend search supported since 1.2.0 (Phase 1.2a-B B-4) -->
+          <form
+            class="mb-4 max-w-md"
+            role="search"
+            onsubmit={handleSearchSubmit}
+          >
+            <label
+              class="search-input"
+              for="tpm-cards-search"
+            >
+              <i
+                class="fas fa-search search-input__icon"
+                aria-hidden="true"
+              ></i>
+              <input
+                id="tpm-cards-search"
+                type="search"
+                class="search-input__field"
+                placeholder="Karte suchen ..."
+                value={searchInput}
+                oninput={handleSearchInput}
+                aria-label="Karten durchsuchen"
+              />
+            </label>
+          </form>
+
           <CardList
-            cards={data.cards}
-            totalCards={data.totalCards}
-            loading={false}
+            {cards}
+            {totalCards}
+            statusFilter={urlState.status}
+            intervalFilter={urlState.intervalType}
+            roleFilter={urlState.cardRole}
+            onfilterchange={handleFilterChange}
             onedit={openEditForm}
             ondelete={handleDeleteRequest}
           />
+
+          <!-- Pagination — anchor links per Per-Page DoD §4 -->
+          {#if pagination.totalPages > 1}
+            <nav
+              class="pagination mt-6"
+              aria-label="Seitennavigation"
+            >
+              {#if pagination.hasPrev}
+                <a
+                  href={pageHref(pagination.page - 1)}
+                  class="pagination__btn pagination__btn--prev"
+                  rel="prev"
+                >
+                  <i class="fas fa-chevron-left"></i>
+                  Zurück
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--prev"
+                  disabled
+                >
+                  <i class="fas fa-chevron-left"></i>
+                  Zurück
+                </button>
+              {/if}
+
+              <div class="pagination__pages">
+                {#each pageRange as page (page)}
+                  <a
+                    href={pageHref(page)}
+                    class="pagination__page"
+                    class:pagination__page--active={page === pagination.page}
+                    aria-current={page === pagination.page ? 'page' : undefined}
+                  >
+                    {page}
+                  </a>
+                {/each}
+              </div>
+
+              {#if pagination.hasNext}
+                <a
+                  href={pageHref(pagination.page + 1)}
+                  class="pagination__btn pagination__btn--next"
+                  rel="next"
+                >
+                  Weiter
+                  <i class="fas fa-chevron-right"></i>
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--next"
+                  disabled
+                >
+                  Weiter
+                  <i class="fas fa-chevron-right"></i>
+                </button>
+              {/if}
+            </nav>
+            <span class="pagination__info mt-2">
+              Zeige {cards.length} von {pagination.total} Karten
+            </span>
+          {/if}
         </div>
       </div>
     </div>

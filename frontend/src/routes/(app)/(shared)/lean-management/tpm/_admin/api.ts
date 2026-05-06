@@ -52,9 +52,21 @@ function numberOr(val: unknown, fallback: number): number {
   return typeof val === 'number' ? val : fallback;
 }
 
-/** Type-safe extraction of paginated data from API response.
- *  Backend returns { data: T[], total, page, pageSize } after unwrap. */
+/**
+ * Type-safe extraction of paginated data from API response.
+ *
+ * Handles three shapes (Phase 4.11b, 2026-05-06): canonical post-4.11a flat
+ * array (pagination meta lifted to `meta.pagination` and stripped by
+ * `apiClient.get` — total is unknowable here, callers needing the true total
+ * use SSR `apiFetchPaginated`); legacy `{data, total, page, pageSize}`
+ * (executions/defects, Known Limitation #12); legacy `{items, total, page,
+ * pageSize}` (pre-4.11a plans/cards).
+ */
 function extractPaginated<T>(result: unknown): PaginatedResponse<T> {
+  if (Array.isArray(result)) {
+    const items = result as T[];
+    return { items, total: items.length, page: 1, limit: items.length };
+  }
   if (result === null || typeof result !== 'object') return EMPTY_PAGE;
   const obj = result as Record<string, unknown>;
   const items =

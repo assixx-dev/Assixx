@@ -7,7 +7,7 @@
  */
 import { redirect } from '@sveltejs/kit';
 
-import { apiFetch, apiFetchWithPermission } from '$lib/server/api-fetch';
+import { apiFetch, apiFetchPaginated, apiFetchWithPermission } from '$lib/server/api-fetch';
 import { assertTeamLevelAccess } from '$lib/server/manage-page-access';
 import { requireAddon } from '$lib/utils/addon-guard';
 import { buildLoginUrl } from '$lib/utils/build-apex-url';
@@ -22,23 +22,24 @@ import type {
   IntervalColorConfigEntry,
 } from '../../_admin/types';
 
-/** Paginated plan list shape (only the data array is needed) */
-interface PlanListData {
-  data: TpmPlan[];
-}
-
 /** Safely coerce nullable API result to array */
 function safeArray<T>(data: T[] | null): T[] {
   return Array.isArray(data) ? data : [];
 }
 
-/** Extract asset UUIDs from paginated plan list */
-function extractAssetUuids(plansData: PlanListData | null): string[] {
-  return (
-    plansData?.data
-      .map((p: TpmPlan) => p.assetUuid)
-      .filter((uuid: string | undefined): uuid is string => uuid !== undefined) ?? []
-  );
+/**
+ * Extract asset UUIDs from a flat plan array.
+ *
+ * Phase 4.11b (2026-05-06): switched from the `extractAssetUuids({data: ...})`
+ * shim to a flat array — `apiFetchPaginated` returns `{data: TpmPlan[], pagination}`
+ * after the canonical envelope unwrap, which the previous shim mis-read after
+ * 4.11a backend rebuild. The picker stays at limit=500 (B2-class band-aid for
+ * Phase 4.12 typeahead) — recorded in Known Limitation #13.
+ */
+function planAssetUuids(plans: TpmPlan[]): string[] {
+  return plans
+    .map((p: TpmPlan) => p.assetUuid)
+    .filter((uuid: string | undefined): uuid is string => uuid !== undefined);
 }
 
 /** Empty data returned when permission is denied */
@@ -104,14 +105,18 @@ export const load: PageServerLoad = async ({ params, cookies, fetch, parent, url
   const shared = await loadOrgData(token, fetch);
 
   if (isCreateMode) {
-    const plansData = await apiFetch<PlanListData>('/tpm/plans?page=1&limit=500', token, fetch);
+    const plansResult = await apiFetchPaginated<TpmPlan>(
+      '/tpm/plans?page=1&limit=500',
+      token,
+      fetch,
+    );
     return {
       permissionDenied: false as const,
       isCreateMode: true,
       plan: null,
       timeEstimates: [],
       ...shared,
-      assetUuidsWithPlans: extractAssetUuids(plansData),
+      assetUuidsWithPlans: planAssetUuids(plansResult.data),
     };
   }
 
