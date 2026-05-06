@@ -1,84 +1,150 @@
 // =============================================================================
-// DOCUMENTS EXPLORER - STATE AGGREGATOR
-// Unified API + cross-cutting operations that touch both data and UI
+// DOCUMENTS EXPLORER — STATE AGGREGATOR (Phase 4.9b URL-driven)
 // =============================================================================
+//
+// Post-Phase-4.9b: data state (documents/category/search/sort/conversationId)
+// is server-driven via SSR; this module owns ONLY the pieces that don't fit
+// the URL contract:
+//   - `currentUser` (mutable ref, refreshed when the upload modal opens so
+//     hasFullAccess / role / teamId / departmentId are fresh on submit)
+//   - `uiState` aggregation (modals, view mode, sort dropdown — `state-ui`)
+//   - mutation cross-cutters (delete / edit / upload submit flows)
+//   - preview navigation (receives `documents: Document[]` from the page —
+//     no longer reads `dataState.filteredDocuments` because that singleton
+//     was deleted; component holds the SSR list as `data.documents`)
+//
+// `markAsRead` triggers `invalidateAll()` after the API call so the
+// per-document `isRead` flip surfaces in the next SSR snapshot — no
+// optimistic in-memory shadow list to keep in sync (was the core liability
+// of the pre-4.9b `state-data.svelte.ts:loadDocuments` workaround).
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.9b §D14
 
 import { invalidateAll } from '$app/navigation';
 
-import { showSuccessAlert, showErrorAlert, showWarningAlert } from '$lib/stores/toast';
+import { notificationStore } from '$lib/stores/notification.store.svelte';
+import { showErrorAlert, showSuccessAlert, showWarningAlert } from '$lib/stores/toast';
 import { createLogger } from '$lib/utils/logger';
+import { handleSessionExpired, isSessionExpiredError } from '$lib/utils/session-expired.js';
+import { fetchCurrentUser as fetchSharedUser } from '$lib/utils/user-service';
 
 import {
   deleteDocument as apiDeleteDocument,
+  markDocumentAsRead as apiMarkAsRead,
   updateDocument as apiUpdateDocument,
   uploadDocument as apiUploadDocument,
 } from './api';
 import { MESSAGES } from './constants';
-import { dataState } from './state-data.svelte';
 import { uiState } from './state-ui.svelte';
 import {
+  buildUploadFormData,
   canDeleteDocument,
   canEditDocument,
-  buildUploadFormData,
-  validateUploadData,
+  canSeeActions,
+  canUpload,
   downloadDocument,
+  validateUploadData,
 } from './utils';
 
-import type { Document, EditData, SortOption, UploadData } from './types';
+import type { CurrentUser, Document, EditData, UploadData } from './types';
 
 const log = createLogger('DocExplorerState');
 
 // =============================================================================
-// CROSS-CUTTING OPERATIONS
+// CURRENT USER — single mutable ref, synced from SSR + refreshable on upload.
+// Module-level $state is allowed in `.svelte.ts` files (Svelte 5 universal
+// reactivity rune); behaves like a singleton across page navigations.
 // =============================================================================
 
+let currentUser = $state<CurrentUser | null>(null);
+
 /**
- * Open preview and mark document as read if unread
+ * Initialise from SSR. Called via `$effect` in `+page.svelte` whenever
+ * `data.currentUser` changes (typically once per session). Idempotent: a
+ * non-null current ref is preserved across re-runs so a fresh `loadCurrentUser`
+ * (called by upload-modal-open) is not clobbered by a stale SSR snapshot.
  */
+function initFromSSR(user: { id: number; role: string } | null): void {
+  if (currentUser === null && user !== null) {
+    currentUser = {
+      id: user.id,
+      tenantId: 0,
+      role: user.role,
+    };
+  }
+}
+
+/**
+ * Refresh the user ref via the shared user service — called when the upload
+ * modal opens so the validator sees fresh `hasFullAccess`, `teamId`,
+ * `departmentId` for the category gate (`validateUserForCategory` in utils).
+ */
+async function loadCurrentUser(): Promise<void> {
+  const result = await fetchSharedUser();
+  currentUser = result.user;
+}
+
+// =============================================================================
+// MARK AS READ — fire-and-forget API + invalidateAll. The pre-4.9b version
+// did an optimistic local mutation of `allDocuments`; with server-driven
+// pagination, `invalidateAll()` re-fetches the current page instead — the
+// `isRead` flip arrives via the next SSR snapshot.
+// =============================================================================
+
+async function markAsRead(documentId: number): Promise<void> {
+  try {
+    await apiMarkAsRead(documentId);
+    notificationStore.decrementCount('documents');
+    await invalidateAll();
+  } catch (err: unknown) {
+    log.error({ err }, 'Error marking as read');
+    if (isSessionExpiredError(err)) handleSessionExpired();
+  }
+}
+
+// =============================================================================
+// PREVIEW NAVIGATION — operates on the page's `documents` array (SSR-driven,
+// passed in by the component since the dataState singleton was deleted).
+// =============================================================================
+
 function handlePreviewOpen(doc: Document): void {
   uiState.openPreview(doc);
-  if (!doc.isRead) void dataState.markAsRead(doc.id);
+  if (!doc.isRead) void markAsRead(doc.id);
 }
 
-/** Navigate to previous document in filtered list (circular) */
-function navigatePreviewPrev(): void {
-  const docs = dataState.filteredDocuments;
+function navigatePreviewPrev(documents: Document[]): void {
   const current = uiState.selectedDocument;
-  if (current === null || docs.length <= 1) return;
-  const idx = docs.findIndex((d) => d.id === current.id);
+  if (current === null || documents.length <= 1) return;
+  const idx = documents.findIndex((d) => d.id === current.id);
   if (idx === -1) return;
-  const prevDoc = docs[idx === 0 ? docs.length - 1 : idx - 1];
+  const prevDoc = documents[idx === 0 ? documents.length - 1 : idx - 1];
   uiState.openPreview(prevDoc);
-  if (!prevDoc.isRead) void dataState.markAsRead(prevDoc.id);
+  if (!prevDoc.isRead) void markAsRead(prevDoc.id);
 }
 
-/** Navigate to next document in filtered list (circular) */
-function navigatePreviewNext(): void {
-  const docs = dataState.filteredDocuments;
+function navigatePreviewNext(documents: Document[]): void {
   const current = uiState.selectedDocument;
-  if (current === null || docs.length <= 1) return;
-  const idx = docs.findIndex((d) => d.id === current.id);
+  if (current === null || documents.length <= 1) return;
+  const idx = documents.findIndex((d) => d.id === current.id);
   if (idx === -1) return;
-  const nextDoc = docs[idx === docs.length - 1 ? 0 : idx + 1];
+  const nextDoc = documents[idx === documents.length - 1 ? 0 : idx + 1];
   uiState.openPreview(nextDoc);
-  if (!nextDoc.isRead) void dataState.markAsRead(nextDoc.id);
+  if (!nextDoc.isRead) void markAsRead(nextDoc.id);
 }
 
-/**
- * Handle delete button click: permission check + open confirm modal
- */
+// =============================================================================
+// DELETE
+// =============================================================================
+
 function handleDeleteDocument(doc: Document, e: MouseEvent): void {
   e.stopPropagation();
-  if (!canDeleteDocument(doc, dataState.currentUser)) {
+  if (!canDeleteDocument(doc, currentUser)) {
     showWarningAlert('Sie haben keine Berechtigung, dieses Dokument zu löschen');
     return;
   }
   uiState.openDeleteModal(doc);
 }
 
-/**
- * Confirm and execute document deletion
- */
 async function confirmDeleteDocument(): Promise<void> {
   const doc = uiState.deletingDocument;
   if (doc === null) return;
@@ -89,7 +155,6 @@ async function confirmDeleteDocument(): Promise<void> {
     showSuccessAlert('Dokument erfolgreich gelöscht');
     uiState.closeDeleteConfirmModal();
     await invalidateAll();
-    await dataState.loadDocuments();
   } catch (err: unknown) {
     log.error({ err }, 'Delete failed');
     showErrorAlert(err instanceof Error ? err.message : 'Löschen fehlgeschlagen');
@@ -98,21 +163,19 @@ async function confirmDeleteDocument(): Promise<void> {
   }
 }
 
-/**
- * Handle edit button click: permission check + open edit modal
- */
+// =============================================================================
+// EDIT
+// =============================================================================
+
 function handleEditClick(doc: Document, e: MouseEvent): void {
   e.stopPropagation();
-  if (!canEditDocument(doc, dataState.currentUser)) {
+  if (!canEditDocument(doc, currentUser)) {
     showWarningAlert('Sie haben keine Berechtigung, dieses Dokument zu bearbeiten');
     return;
   }
   uiState.openEditModal(doc);
 }
 
-/**
- * Submit document edit: validate + API call + reload
- */
 async function handleEditSubmit(data: EditData): Promise<void> {
   if (uiState.editingDocument === null) return;
   if (!data.documentName.trim()) {
@@ -126,7 +189,6 @@ async function handleEditSubmit(data: EditData): Promise<void> {
     showSuccessAlert('Dokument erfolgreich aktualisiert');
     uiState.closeEditModal();
     await invalidateAll();
-    await dataState.loadDocuments();
   } catch (err: unknown) {
     log.error({ err }, 'Update failed');
     showErrorAlert(err instanceof Error ? err.message : 'Aktualisieren fehlgeschlagen');
@@ -135,19 +197,17 @@ async function handleEditSubmit(data: EditData): Promise<void> {
   }
 }
 
-/**
- * Open upload modal and refresh user data
- */
+// =============================================================================
+// UPLOAD
+// =============================================================================
+
 function handleUploadOpen(): void {
   uiState.openUploadModal();
-  void dataState.loadCurrentUser();
+  void loadCurrentUser();
 }
 
-/**
- * Submit document upload: validate + API call + reload
- */
 async function handleUploadSubmit(data: UploadData): Promise<void> {
-  const result = validateUploadData(data, dataState.currentUser);
+  const result = validateUploadData(data, currentUser);
   if (!result.valid) {
     if (result.type === 'warning') {
       showWarningAlert(result.error);
@@ -179,100 +239,48 @@ async function handleUploadSubmit(data: UploadData): Promise<void> {
     showSuccessAlert(MESSAGES.UPLOAD_SUCCESS);
     uiState.closeUploadModal();
     await invalidateAll();
-    await dataState.loadDocuments();
   } catch (err: unknown) {
     log.error({ err }, 'Upload failed');
     showErrorAlert(err instanceof Error ? err.message : MESSAGES.ERROR_UPLOAD_FAILED);
   }
 }
 
-/**
- * Handle download click with event propagation stop
- */
+// =============================================================================
+// DOWNLOAD
+// =============================================================================
+
 function handleDownloadClick(doc: Document, e: MouseEvent): void {
   e.stopPropagation();
   downloadDocument(doc);
 }
 
-/**
- * Handle sort option select: update sort + close dropdown
- */
-function handleSortOptionSelect(option: SortOption): void {
-  dataState.handleSortChange(option);
-  uiState.setSortDropdownOpen(false);
+// =============================================================================
+// PERMISSION HELPERS — exposed so component can derive button visibility
+// without re-importing utils.
+// =============================================================================
+
+function showUploadButton(user: CurrentUser | null): boolean {
+  return canUpload(user?.role ?? null);
+}
+
+function showActions(user: CurrentUser | null): boolean {
+  return canSeeActions(user?.role ?? null);
 }
 
 // =============================================================================
-// UNIFIED STATE OBJECT
-// Delegates to dataState/uiState with unified getter API
+// PUBLIC API
 // =============================================================================
 
 export const docExplorerState = {
   // ---------------------------------------------------------------------------
-  // DATA GETTERS
+  // CURRENT USER
   // ---------------------------------------------------------------------------
-  get allDocuments() {
-    return dataState.allDocuments;
-  },
-  get filteredDocuments() {
-    return dataState.filteredDocuments;
-  },
-  get chatFolders() {
-    return dataState.chatFolders;
-  },
-  get selectedConversationId() {
-    return dataState.selectedConversationId;
-  },
   get currentUser() {
-    return dataState.currentUser;
-  },
-  get userRole() {
-    return dataState.userRole;
-  },
-  get loading() {
-    return dataState.loading;
-  },
-  get error() {
-    return dataState.error;
-  },
-  get currentCategory() {
-    return dataState.currentCategory;
-  },
-  get searchQuery() {
-    return dataState.searchQuery;
-  },
-  get sortOption() {
-    return dataState.sortOption;
-  },
-
-  // Data derived
-  get categoryCounts() {
-    return dataState.categoryCounts;
-  },
-  get stats() {
-    return dataState.stats;
-  },
-  get chatFoldersTotalCount() {
-    return dataState.chatFoldersTotalCount;
-  },
-  get currentSortLabel() {
-    return dataState.currentSortLabel;
-  },
-  get showUploadButton() {
-    return dataState.showUploadButton;
-  },
-  get showActions() {
-    return dataState.showActions;
-  },
-  get isViewingChatFolders() {
-    return dataState.isViewingChatFolders;
-  },
-  get selectedChatFolderName() {
-    return dataState.selectedChatFolderName;
+    return currentUser;
   },
 
   // ---------------------------------------------------------------------------
-  // UI GETTERS
+  // UI STATE DELEGATES (modals, view mode, sort dropdown)
   // ---------------------------------------------------------------------------
   get viewMode() {
     return uiState.viewMode;
@@ -307,26 +315,7 @@ export const docExplorerState = {
   get deleteSubmitting() {
     return uiState.deleteSubmitting;
   },
-  get previewIndex() {
-    const current = uiState.selectedDocument;
-    if (current === null) return -1;
-    return dataState.filteredDocuments.findIndex((d) => d.id === current.id);
-  },
-  get previewTotalCount() {
-    return dataState.filteredDocuments.length;
-  },
 
-  // ---------------------------------------------------------------------------
-  // DATA METHODS
-  // ---------------------------------------------------------------------------
-  initFromSSR: dataState.initFromSSR,
-  loadDocuments: dataState.loadDocuments,
-  loadChatFolders: dataState.loadChatFolders,
-  loadChatAttachments: dataState.loadChatAttachments,
-  navigateToCategory: dataState.navigateToCategory,
-  backToFolders: dataState.backToFolders,
-  handleSearchInput: dataState.handleSearchInput,
-  clearSearch: dataState.clearSearch,
   // ---------------------------------------------------------------------------
   // UI METHODS
   // ---------------------------------------------------------------------------
@@ -338,6 +327,12 @@ export const docExplorerState = {
   closeUploadModal: uiState.closeUploadModal,
   closeEditModal: uiState.closeEditModal,
   closeDeleteConfirmModal: uiState.closeDeleteConfirmModal,
+
+  // ---------------------------------------------------------------------------
+  // LIFECYCLE
+  // ---------------------------------------------------------------------------
+  initFromSSR,
+  loadCurrentUser,
 
   // ---------------------------------------------------------------------------
   // CROSS-CUTTING OPERATIONS
@@ -352,6 +347,11 @@ export const docExplorerState = {
   handleUploadOpen,
   handleUploadSubmit,
   handleDownloadClick,
-  handleSortOptionSelect,
   downloadDocument,
+
+  // ---------------------------------------------------------------------------
+  // PERMISSION HELPERS
+  // ---------------------------------------------------------------------------
+  showUploadButton,
+  showActions,
 };

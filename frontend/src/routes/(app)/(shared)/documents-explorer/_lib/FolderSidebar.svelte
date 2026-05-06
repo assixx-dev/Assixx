@@ -1,16 +1,26 @@
 <script lang="ts">
+  /**
+   * FolderSidebar — Phase 4.9b: per-category count badges dropped (W3 /
+   * Known Limitation #11). Pre-migration counts derived from the loaded
+   * subset only and were silently wrong on tenants with > 20 docs per
+   * scope. Total count remains visible in the page-header stats. The
+   * `chat` row keeps its `chatFoldersTotalCount` aggregate because that
+   * value comes from the dedicated `/documents/chat-folders` endpoint
+   * (server-side aggregate, NOT subject to the documents-list limit).
+   *
+   * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.9b §D18 W3
+   */
   import { FOLDER_DEFINITIONS } from './constants';
 
-  import type { DocumentCategory, CategoryCounts } from './types';
+  import type { DocumentCategory } from './types';
 
   interface Props {
     currentCategory: DocumentCategory;
-    categoryCounts: CategoryCounts;
     chatFoldersTotalCount: number;
     onnavigate: (category: DocumentCategory) => void;
   }
 
-  const { currentCategory, categoryCounts, chatFoldersTotalCount, onnavigate }: Props = $props();
+  const { currentCategory, chatFoldersTotalCount, onnavigate }: Props = $props();
 </script>
 
 <div class="w-64 border-r border-(--border-color) bg-(--background-secondary)">
@@ -20,8 +30,6 @@
   >
     <ul class="space-y-1">
       {#each FOLDER_DEFINITIONS as folder (folder.category)}
-        {@const count =
-          folder.category === 'chat' ? chatFoldersTotalCount : categoryCounts[folder.category]}
         {@const isActive = folder.category === currentCategory}
         <li>
           <button
@@ -41,7 +49,9 @@
               {@html folder.icon}
             </span>
             <span class="text-sm {isActive ? 'font-medium' : ''}">{folder.label}</span>
-            <span class="text-content-tertiary ml-auto text-xs">{count}</span>
+            {#if folder.category === 'chat'}
+              <span class="text-content-tertiary ml-auto text-xs">{chatFoldersTotalCount}</span>
+            {/if}
           </button>
         </li>
       {/each}

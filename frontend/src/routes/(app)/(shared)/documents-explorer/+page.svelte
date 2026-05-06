@@ -1,18 +1,28 @@
 <script lang="ts">
   /**
-   * Documents Explorer - Page Component (Thin Presentation Layer)
-   * SSR: Data loaded in +page.server.ts
-   * Level 3 Hybrid: SSR initial + client-side filtering/sorting
+   * Documents Explorer — Page Component (Phase 4.9b URL-driven state)
    *
-   * All state logic lives in _lib/state.svelte.ts (state module pattern)
-   * This component handles: SSR sync, DOM effects, template rendering
+   * URL is the single source of truth for `?page` / `?search` / `?accessScope`
+   * / `?sort` / `?conversationId`. Server load (`+page.server.ts`) reads them,
+   * the backend filters/sorts/paginates, and SSR data flows back as
+   * `data.documents` + `data.pagination`. No client-side filter / sort.
+   *
+   * Pagination block + sidebar / sort dropdown / search input → `goto()`
+   * navigation; mutations → `invalidateAll()` (re-runs load on the same URL).
+   *
+   * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.9b §D18 (W1/W2/W3)
+   * @see docs/how-to/HOW-TO-FIX-MANAGE-PAGINATION.md "Phase 2 — Server-Driven"
    */
   import { onMount, untrack } from 'svelte';
 
+  import { goto } from '$app/navigation';
+  import { resolve } from '$app/paths';
+
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   import ChatFoldersList from './_lib/ChatFoldersList.svelte';
-  import { SORT_OPTIONS, CATEGORY_LABELS, MESSAGES } from './_lib/constants';
+  import { CATEGORY_LABELS, MESSAGES, SORT_OPTIONS } from './_lib/constants';
   import DeleteConfirmModal from './_lib/DeleteConfirmModal.svelte';
   import DocumentGridView from './_lib/DocumentGridView.svelte';
   import DocumentListView from './_lib/DocumentListView.svelte';
@@ -23,39 +33,182 @@
   import UploadModal from './_lib/UploadModal.svelte';
 
   import type { PageData } from './$types';
+  import type { AccessScopeFilter, SortValue } from './+page.server';
+  import type { DocumentCategory } from './_lib/types';
 
   // ==========================================================================
-  // SSR DATA → STATE SYNC
+  // SSR DATA — single source of truth, $derived re-runs on every URL change
   // ==========================================================================
 
   const { data }: { data: PageData } = $props();
 
   const permissionDenied = $derived(data.permissionDenied);
+  const documents = $derived(data.documents);
+  const pagination = $derived(data.pagination);
+  const chatFolders = $derived(data.chatFolders);
+  const currentUser = $derived(data.currentUser ?? null);
 
-  // Derived SSR data as baseline (re-evaluates on invalidateAll)
-  const ssrDocuments = $derived(data.documents);
-  const ssrChatFolders = $derived(data.chatFolders);
-  const ssrUser = $derived(data.currentUser ?? null);
+  // URL-driven state (server load already normalised against allow-lists)
+  const searchQuery = $derived(data.search);
+  const accessScope = $derived(data.accessScope);
+  const currentSort = $derived(data.sort);
+  const conversationId = $derived(data.conversationId);
 
-  // Sync SSR → state store (untrack prevents circular dependency)
+  /**
+   * URL `accessScope` ↔ existing `DocumentCategory` enum: the two unions are
+   * value-identical (server allow-list mirrors `DocumentCategory` verbatim —
+   * see §D5), but TypeScript treats them as nominally distinct. Cast is
+   * mechanical, not semantic — verified against `_lib/types.ts:DocumentCategory`.
+   */
+  const currentCategory = $derived(accessScope as DocumentCategory);
+  const isViewingChatFolders = $derived(currentCategory === 'chat' && conversationId === null);
+
+  const selectedChatFolderName = $derived.by(() => {
+    if (conversationId === null) return null;
+    const folder = chatFolders.find((f) => f.conversationId === conversationId);
+    if (folder === undefined) return null;
+    return folder.isGroup && folder.groupName !== null ? folder.groupName : folder.participantName;
+  });
+
+  const chatFoldersTotalCount = $derived(
+    chatFolders.reduce((sum, f) => sum + f.attachmentCount, 0),
+  );
+
+  /**
+   * Stats: `total` is authoritative (server `pagination.total`). `unread` is
+   * a best-effort client count over the LOADED page only — full-tenant unread
+   * needs a dedicated count endpoint (§D18 W3 / Known Limitation #11).
+   */
+  const stats = $derived({
+    total: pagination.total,
+    unread: documents.filter((d) => !d.isRead).length,
+  });
+
+  const currentSortLabel = $derived(
+    SORT_OPTIONS.find((o) => o.value === currentSort)?.label ?? 'Neueste zuerst',
+  );
+
+  const showUploadButton = $derived(docExplorerState.showUploadButton(currentUser));
+  const showActions = $derived(docExplorerState.showActions(currentUser));
+
+  /** Sync SSR `currentUser` into the state module (modal-driven user lookups). */
   $effect(() => {
-    const docs = ssrDocuments;
-    const folders = ssrChatFolders;
-    const user = ssrUser;
-
+    const user = currentUser;
     untrack(() => {
-      docExplorerState.initFromSSR(docs, folders, user);
+      docExplorerState.initFromSSR(user);
     });
   });
 
   // ==========================================================================
-  // DOM-DEPENDENT EFFECTS (must stay in component)
+  // URL NAVIGATION HELPERS — anchor-based pagination + filter→URL goto().
+  // Mirrors `manage-dummies` / `blackboard` reference impls.
   // ==========================================================================
 
-  /** Close sort dropdown on outside click */
+  const BASE_PATH = '/documents-explorer';
+
+  /**
+   * Build href for target page, preserving search / accessScope / sort /
+   * conversationId. Defaults are skipped by `buildPaginatedHref` so the
+   * canonical first-page URL is clean (`/documents-explorer`).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchQuery,
+        accessScope: accessScope === 'all' ? undefined : accessScope,
+        sort: currentSort === 'newest' ? undefined : currentSort,
+        conversationId: conversationId ?? undefined,
+      }),
+    );
+  }
+
+  /**
+   * Navigate to a new filter / search / sort / conversation state. Page
+   * always resets to 1 (the default — never emitted into the URL).
+   */
+  async function navigateFilters(next: {
+    search?: string;
+    accessScope?: AccessScopeFilter;
+    sort?: SortValue;
+    /** `null` clears the conversationId param; `undefined` keeps the current one. */
+    conversationId?: number | null;
+  }): Promise<void> {
+    const nextSearch = next.search ?? searchQuery;
+    const nextScope = next.accessScope ?? accessScope;
+    const nextSort = next.sort ?? currentSort;
+    const nextConvId = next.conversationId !== undefined ? next.conversationId : conversationId;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1 (default, not emitted)
+        search: nextSearch,
+        accessScope: nextScope === 'all' ? undefined : nextScope,
+        sort: nextSort === 'newest' ? undefined : nextSort,
+        conversationId: nextConvId ?? undefined,
+      }),
+    );
+    await goto(href, { keepFocus: true, replaceState: true, noScroll: true });
+  }
+
+  // ==========================================================================
+  // FILTER / SEARCH / SORT / CHAT-FOLDER HANDLERS
+  // ==========================================================================
+
+  /**
+   * Search debounce — 250 ms before firing the URL update. Keeps focus on
+   * the input (`keepFocus: true` in `goto`), so typing across re-runs feels
+   * native. Matches the `SearchBar` debounce duration used elsewhere.
+   */
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function onSearchInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const value = input.value;
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      void navigateFilters({ search: value });
+    }, 250);
+  }
+
+  function clearSearch(): void {
+    if (searchDebounceTimer !== null) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    void navigateFilters({ search: '' });
+  }
+
+  /**
+   * Sidebar category click. Resets `conversationId` to null so leaving the
+   * chat scope does not leave a stale `?conversationId=N` orphan in the URL.
+   */
+  function navigateToCategory(category: DocumentCategory): void {
+    void navigateFilters({ accessScope: category, conversationId: null });
+  }
+
+  /** Breadcrumb back-arrow inside a chat conversation: drop conversationId only. */
+  function backToFolders(): void {
+    void navigateFilters({ conversationId: null });
+  }
+
+  /** ChatFoldersList row click → enter that conversation's docs. */
+  function loadChatConversation(convId: number): void {
+    void navigateFilters({ conversationId: convId });
+  }
+
+  function setSort(option: SortValue): void {
+    docExplorerState.setSortDropdownOpen(false);
+    void navigateFilters({ sort: option });
+  }
+
+  // ==========================================================================
+  // DOM-DEPENDENT EFFECTS
+  // ==========================================================================
+
+  /** Close sort dropdown on outside click. */
   $effect(() => {
     if (docExplorerState.sortDropdownOpen) {
-      const handleOutsideClick = (e: MouseEvent) => {
+      const handleOutsideClick = (e: MouseEvent): void => {
         const target = e.target as HTMLElement;
         const el = document.getElementById('sort-dropdown');
         if (el !== null && !el.contains(target)) {
@@ -69,19 +222,20 @@
     }
   });
 
-  /** Global keyboard handler for preview navigation */
+  /** Global keyboard handler for preview navigation. Passes current page docs. */
   function handleKeydown(e: KeyboardEvent): void {
     if (docExplorerState.showPreviewModal) {
-      if (e.key === 'ArrowLeft') docExplorerState.navigatePreviewPrev();
-      else if (e.key === 'ArrowRight') docExplorerState.navigatePreviewNext();
+      if (e.key === 'ArrowLeft') docExplorerState.navigatePreviewPrev(documents);
+      else if (e.key === 'ArrowRight') docExplorerState.navigatePreviewNext(documents);
     }
   }
 
-  /** Extract search query from input event and delegate to state */
-  function onSearchInput(e: Event): void {
-    const input = e.target as HTMLInputElement;
-    docExplorerState.handleSearchInput(input.value);
-  }
+  /** Preview index inside the current page (server-paginated subset). */
+  const previewIndex = $derived.by(() => {
+    const current = docExplorerState.selectedDocument;
+    if (current === null) return -1;
+    return documents.findIndex((d) => d.id === current.id);
+  });
 
   // ==========================================================================
   // LIFECYCLE
@@ -125,20 +279,20 @@
                   class="search-input__field"
                   placeholder="Dokumente durchsuchen..."
                   autocomplete="off"
-                  value={docExplorerState.searchQuery}
+                  value={searchQuery}
                   oninput={onSearchInput}
                 />
                 <button
                   type="button"
                   class="search-input__clear"
-                  class:hidden={!docExplorerState.searchQuery}
-                  onclick={docExplorerState.clearSearch}
+                  class:hidden={searchQuery === ''}
+                  onclick={clearSearch}
                   aria-label="Suche löschen"
                 >
                   <i class="fas fa-times"></i>
                 </button>
               </div>
-              {#if docExplorerState.showUploadButton}
+              {#if showUploadButton}
                 <button
                   type="button"
                   id="upload-btn"
@@ -195,7 +349,7 @@
                     if (e.key === 'Enter') docExplorerState.toggleSortDropdown();
                   }}
                 >
-                  <span>{docExplorerState.currentSortLabel}</span>
+                  <span>{currentSortLabel}</span>
                   <i class="fas fa-chevron-down"></i>
                 </div>
                 <div
@@ -208,7 +362,7 @@
                     <div
                       class="dropdown__option"
                       onclick={() => {
-                        docExplorerState.handleSortOptionSelect(option.value);
+                        setSort(option.value);
                       }}
                     >
                       {option.label}
@@ -219,7 +373,7 @@
             </div>
           </div>
 
-          <!-- Quick Stats -->
+          <!-- Quick Stats — `total` from server pagination (authoritative). -->
           <div class="mt-4 flex items-center gap-6 text-sm">
             <div class="flex items-center gap-2">
               <svg
@@ -236,15 +390,11 @@
                   01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                 ></path>
               </svg>
-              <span class="text-content-secondary text-sm"
-                >{docExplorerState.stats.total} Dokumente</span
-              >
+              <span class="text-content-secondary text-sm">{stats.total} Dokumente</span>
             </div>
-            {#if docExplorerState.stats.unread > 0}
+            {#if stats.unread > 0}
               <div class="flex items-center gap-2">
-                <span class="text-warning-500 text-sm"
-                  >{docExplorerState.stats.unread} Ungelesen</span
-                >
+                <span class="text-warning-500 text-sm">{stats.unread} Ungelesen</span>
               </div>
             {/if}
           </div>
@@ -258,7 +408,7 @@
           class="breadcrumb mb-2"
           aria-label="Ordnerpfad"
         >
-          {#if docExplorerState.currentCategory === 'all'}
+          {#if currentCategory === 'all'}
             <span
               class="breadcrumb__item breadcrumb__item--active"
               aria-current="page"
@@ -274,7 +424,7 @@
               type="button"
               class="breadcrumb__item"
               onclick={() => {
-                docExplorerState.navigateToCategory('all');
+                navigateToCategory('all');
               }}
             >
               <i
@@ -289,13 +439,13 @@
             >
               <i class="fas fa-chevron-right"></i>
             </span>
-            {#if docExplorerState.selectedConversationId !== null && docExplorerState.selectedChatFolderName !== null}
+            {#if conversationId !== null && selectedChatFolderName !== null}
               <button
                 type="button"
                 class="breadcrumb__item"
-                onclick={docExplorerState.backToFolders}
+                onclick={backToFolders}
               >
-                {CATEGORY_LABELS[docExplorerState.currentCategory]}
+                {CATEGORY_LABELS[currentCategory]}
               </button>
               <span
                 class="breadcrumb__separator"
@@ -311,79 +461,60 @@
                   class="fas fa-comments breadcrumb__icon"
                   aria-hidden="true"
                 ></i>
-                {docExplorerState.selectedChatFolderName}
+                {selectedChatFolderName}
               </span>
             {:else}
               <span
                 class="breadcrumb__item breadcrumb__item--active"
                 aria-current="page"
               >
-                {CATEGORY_LABELS[docExplorerState.currentCategory]}
+                {CATEGORY_LABELS[currentCategory]}
               </span>
             {/if}
           {/if}
         </nav>
 
         <div class="flex h-[600px]">
-          <!-- Sidebar -->
+          <!-- Sidebar (W3: count badges dropped — see Known Limitation #11). -->
           <FolderSidebar
-            currentCategory={docExplorerState.currentCategory}
-            categoryCounts={docExplorerState.categoryCounts}
-            chatFoldersTotalCount={docExplorerState.chatFoldersTotalCount}
-            onnavigate={docExplorerState.navigateToCategory}
+            {currentCategory}
+            {chatFoldersTotalCount}
+            onnavigate={navigateToCategory}
           />
 
           <!-- Content Area -->
           <div class="flex flex-1 flex-col">
             <div class="flex-1 overflow-y-auto p-2">
-              {#if docExplorerState.loading}
-                <div class="flex items-center justify-center p-8">
-                  <div class="spinner-ring spinner-ring--md"></div>
-                </div>
-              {:else if docExplorerState.error}
-                <div class="flex h-full items-center justify-center">
-                  <div class="text-center">
-                    <i class="fas fa-exclamation-triangle text-error-500 mb-4 text-4xl"></i>
-                    <p class="text-content-secondary mb-4">
-                      {docExplorerState.error}
-                    </p>
-                    <button
-                      type="button"
-                      class="btn btn-primary"
-                      onclick={() => docExplorerState.loadDocuments()}>{MESSAGES.BTN_RETRY}</button
-                    >
-                  </div>
-                </div>
-              {:else if docExplorerState.isViewingChatFolders}
+              {#if isViewingChatFolders}
                 <div class:hidden={docExplorerState.viewMode !== 'list'}>
                   <ChatFoldersList
-                    folders={docExplorerState.chatFolders}
+                    folders={chatFolders}
                     showBackToAll={true}
-                    onfolderClick={docExplorerState.loadChatAttachments}
+                    onfolderClick={loadChatConversation}
                     onbackToAll={() => {
-                      docExplorerState.navigateToCategory('all');
+                      navigateToCategory('all');
                     }}
                   />
                 </div>
               {:else}
                 <div class:hidden={docExplorerState.viewMode !== 'list'}>
                   <DocumentListView
-                    documents={docExplorerState.filteredDocuments}
-                    currentUser={docExplorerState.currentUser}
-                    showActions={docExplorerState.showActions}
-                    showBackToFolders={docExplorerState.selectedConversationId !== null}
+                    {documents}
+                    {currentUser}
+                    {showActions}
+                    showBackToFolders={conversationId !== null}
                     onpreview={docExplorerState.handlePreviewOpen}
                     ondownload={docExplorerState.handleDownloadClick}
                     onedit={docExplorerState.handleEditClick}
                     ondelete={docExplorerState.handleDeleteDocument}
-                    onbackToFolders={docExplorerState.backToFolders}
+                    onbackToFolders={backToFolders}
                   />
                 </div>
                 <div class:hidden={docExplorerState.viewMode !== 'grid'}>
                   <DocumentGridView
-                    documents={docExplorerState.filteredDocuments}
-                    currentUser={docExplorerState.currentUser}
-                    showActions={docExplorerState.showActions}
+                    {documents}
+                    {currentUser}
+                    {showActions}
                     onpreview={docExplorerState.handlePreviewOpen}
                     ondownload={docExplorerState.handleDownloadClick}
                     onedit={docExplorerState.handleEditClick}
@@ -392,6 +523,77 @@
                 </div>
               {/if}
             </div>
+
+            <!-- Pagination — URL-driven anchors (W1: NEW in 4.9b — page had
+                 no pagination block before; backend `limit=20` was silently
+                 capping). Hidden in chat-folder-list view (no docs paginated).
+                 Mirrors `blackboard/+page.svelte` block verbatim. -->
+            {#if !isViewingChatFolders && pagination.totalPages > 1}
+              <nav
+                class="mt-4 flex items-center justify-center gap-2"
+                aria-label="Seitennavigation"
+              >
+                <div class="pagination">
+                  {#if pagination.hasPrev}
+                    <a
+                      class="pagination__btn"
+                      href={pageHref(pagination.page - 1)}
+                      rel="prev"
+                      aria-label="Vorherige Seite"
+                    >
+                      <i class="fas fa-chevron-left"></i>
+                    </a>
+                  {:else}
+                    <button
+                      type="button"
+                      class="pagination__btn"
+                      disabled
+                      aria-label="Vorherige Seite"
+                    >
+                      <i class="fas fa-chevron-left"></i>
+                    </button>
+                  {/if}
+
+                  {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as p (p)}
+                    {#if p === pagination.page}
+                      <span
+                        class="pagination__btn active"
+                        aria-current="page"
+                      >
+                        {p}
+                      </span>
+                    {:else}
+                      <a
+                        class="pagination__btn"
+                        href={pageHref(p)}
+                      >
+                        {p}
+                      </a>
+                    {/if}
+                  {/each}
+
+                  {#if pagination.hasNext}
+                    <a
+                      class="pagination__btn"
+                      href={pageHref(pagination.page + 1)}
+                      rel="next"
+                      aria-label="Nächste Seite"
+                    >
+                      <i class="fas fa-chevron-right"></i>
+                    </a>
+                  {:else}
+                    <button
+                      type="button"
+                      class="pagination__btn"
+                      disabled
+                      aria-label="Nächste Seite"
+                    >
+                      <i class="fas fa-chevron-right"></i>
+                    </button>
+                  {/if}
+                </div>
+              </nav>
+            {/if}
           </div>
         </div>
       </div>
@@ -404,10 +606,14 @@
     document={docExplorerState.selectedDocument}
     onclose={docExplorerState.closePreview}
     ondownload={docExplorerState.downloadDocument}
-    onprev={docExplorerState.navigatePreviewPrev}
-    onnext={docExplorerState.navigatePreviewNext}
-    currentIndex={docExplorerState.previewIndex >= 0 ? docExplorerState.previewIndex : undefined}
-    totalCount={docExplorerState.previewTotalCount}
+    onprev={() => {
+      docExplorerState.navigatePreviewPrev(documents);
+    }}
+    onnext={() => {
+      docExplorerState.navigatePreviewNext(documents);
+    }}
+    currentIndex={previewIndex >= 0 ? previewIndex : undefined}
+    totalCount={documents.length}
   />
 
   <UploadModal
