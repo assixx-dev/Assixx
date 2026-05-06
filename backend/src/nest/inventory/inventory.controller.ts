@@ -57,6 +57,7 @@ import type {
   InventoryItemPhoto,
   InventoryItemPhotoRow,
   InventoryItemRow,
+  InventoryItemRowWithCustomValues,
   InventoryList,
   InventoryListWithCounts,
   InventoryTag,
@@ -286,10 +287,12 @@ export class InventoryController {
   @Get('items')
   @RequirePermission(ADDON, MOD_ITEMS, 'canRead')
   async getItems(@Query() query: ItemsQueryDto): Promise<{
-    items: InventoryItemRow[];
-    total: number;
-    customValuesByItem: Record<string, InventoryCustomValueWithField[]>;
+    items: InventoryItemRowWithCustomValues[];
+    pagination: { page: number; limit: number; total: number; totalPages: number };
   }> {
+    // Returns the canonical ADR-007 paginated envelope; ResponseInterceptor
+    // recognises `{ items, pagination }` and emits `meta.pagination`.
+    // See FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.8a + §D17.
     return await this.itemsService.findByList(query.listId, {
       status: query.status,
       search: query.search,

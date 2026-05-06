@@ -78,6 +78,20 @@ export interface InventoryItemRow {
   created_by_name: string | null;
 }
 
+/**
+ * Item row enriched with its custom values for the list view.
+ *
+ * WHY a dedicated type (not a field on `InventoryItemRow`):
+ * Phase 4.8a (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §D17) embeds
+ * `customValues` per row so the response can ship the canonical ADR-007
+ * envelope `{ items, pagination }` without a sibling `customValuesByItem`
+ * map. `InventoryItemRow` stays lean for `create`/`update`/`findByUuid`
+ * paths that don't need the join. Only `findByList` denormalises this.
+ */
+export interface InventoryItemRowWithCustomValues extends InventoryItemRow {
+  customValues: InventoryCustomValueWithField[];
+}
+
 export interface InventoryCustomFieldRow {
   id: string;
   tenant_id: number;

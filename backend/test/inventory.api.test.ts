@@ -453,16 +453,47 @@ describe('Inventory: Create Item (Auto-Code)', () => {
 });
 
 describe('Inventory: Get Items', () => {
-  it('should return items filtered by listId', async () => {
+  it('should return canonical ADR-007 envelope (data array + meta.pagination)', async () => {
+    // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.8a + §D17:
+    // ResponseInterceptor unwraps `{ items, pagination }` so `body.data` is the
+    // items array and `body.meta.pagination` carries the page metadata.
     const res = await fetch(`${API}/items?listId=${listId}`, {
       headers: authOnly(auth.authToken),
     });
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as JsonBody;
-    expect(body.data).toHaveProperty('items');
-    expect(body.data).toHaveProperty('total');
-    expect(body.data.total).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as unknown[]).length).toBeGreaterThanOrEqual(1);
+    expect(body.meta).toBeDefined();
+    expect(body.meta?.pagination).toBeDefined();
+    expect(body.meta?.pagination).toHaveProperty('page');
+    expect(body.meta?.pagination).toHaveProperty('limit');
+    expect(body.meta?.pagination).toHaveProperty('total');
+    expect(body.meta?.pagination).toHaveProperty('totalPages');
+  });
+
+  it('should echo ?page=2&limit=10 with correct totalPages math', async () => {
+    // Mirrors Phase 3.1 dummy-users + 4.5a KVP + 4.7a work-orders precedent.
+    // Verifies the envelope reports the requested page/limit and computes
+    // totalPages = total === 0 ? 0 : Math.ceil(total/limit). Works on whatever
+    // fixture data exists — assertion is on the math, not on a specific count.
+    const res = await fetch(`${API}/items?listId=${listId}&page=2&limit=10`, {
+      headers: authOnly(auth.authToken),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as JsonBody;
+    const pagination = body.meta?.pagination as {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+    expect(pagination.page).toBe(2);
+    expect(pagination.limit).toBe(10);
+    const expectedTotalPages = pagination.total === 0 ? 0 : Math.ceil(pagination.total / 10);
+    expect(pagination.totalPages).toBe(expectedTotalPages);
   });
 
   it('should require listId parameter', async () => {

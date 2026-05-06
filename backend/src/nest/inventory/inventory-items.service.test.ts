@@ -112,7 +112,10 @@ describe('InventoryItemsService', () => {
   // ── findByList ──────────────────────────────────────────────
 
   describe('findByList', () => {
-    it('should return paginated items with custom values', async () => {
+    it('should return canonical ADR-007 envelope with empty customValues per row', async () => {
+      // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.8a + §D17:
+      // findByList returns `{ items, pagination }`; each row carries its own
+      // `customValues` (no sibling map). Empty batch → each row has [] inline.
       const items = [makeItemRow({ code: 'KRN-001' }), makeItemRow({ code: 'KRN-002' })];
       qf.mockResolvedValueOnce([{ count: '2' }]);
       qf.mockResolvedValueOnce(items);
@@ -125,9 +128,13 @@ describe('InventoryItemsService', () => {
         limit: 50,
       });
 
-      expect(result.total).toBe(2);
+      expect(result.pagination.total).toBe(2);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(50);
+      expect(result.pagination.totalPages).toBe(1);
       expect(result.items).toHaveLength(2);
-      expect(result.customValuesByItem).toEqual({});
+      expect(result.items[0]?.customValues).toEqual([]);
+      expect(result.items[1]?.customValues).toEqual([]);
     });
 
     it('should filter by status', async () => {
@@ -142,7 +149,7 @@ describe('InventoryItemsService', () => {
         limit: 50,
       });
 
-      expect(result.total).toBe(1);
+      expect(result.pagination.total).toBe(1);
       expect(result.items[0]?.status).toBe('defective');
     });
 
@@ -158,10 +165,12 @@ describe('InventoryItemsService', () => {
         limit: 50,
       });
 
-      expect(result.total).toBe(1);
+      expect(result.pagination.total).toBe(1);
     });
 
-    it('should return empty when no items match', async () => {
+    it('should return empty envelope when no items match (totalPages=0)', async () => {
+      // §4.8a precedent (mirrors Phase 3.1 dummy-users + 4.5a KVP + 4.7a work-orders):
+      // total === 0 → totalPages === 0 (NOT Math.ceil(0/limit) which would crash on /0).
       qf.mockResolvedValueOnce([{ count: '0' }]);
       qf.mockResolvedValueOnce([]);
 
@@ -172,7 +181,8 @@ describe('InventoryItemsService', () => {
         limit: 50,
       });
 
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
+      expect(result.pagination.totalPages).toBe(0);
       expect(result.items).toHaveLength(0);
     });
 
@@ -582,7 +592,10 @@ describe('InventoryItemsService', () => {
       expect(sql).toContain('location');
     });
 
-    it('should batch-load custom values grouped by item_id', async () => {
+    it('should batch-load custom values denormalised per item row', async () => {
+      // §4.8a + §D17: customValues lives ON each item row, not as a sibling map.
+      // The batch-load helper still issues 1 SQL query for the whole page; this
+      // test asserts the in-memory denormalisation maps `itemId` → `row.customValues`.
       const items = [
         makeItemRow({ id: 'item-1', code: 'KRN-001' }),
         makeItemRow({ id: 'item-2', code: 'KRN-002' }),
@@ -602,9 +615,12 @@ describe('InventoryItemsService', () => {
         limit: 50,
       });
 
-      expect(Object.keys(result.customValuesByItem)).toHaveLength(2);
-      expect(result.customValuesByItem['item-1']).toHaveLength(2);
-      expect(result.customValuesByItem['item-2']).toHaveLength(1);
+      const item1 = result.items.find((i) => i.id === 'item-1');
+      const item2 = result.items.find((i) => i.id === 'item-2');
+      expect(item1?.customValues).toHaveLength(2);
+      expect(item2?.customValues).toHaveLength(1);
+      // Asserts the `itemId` key was stripped before embedding (helper contract).
+      expect(item1?.customValues[0]).not.toHaveProperty('itemId');
     });
 
     it('should return fields in findByUuid', async () => {

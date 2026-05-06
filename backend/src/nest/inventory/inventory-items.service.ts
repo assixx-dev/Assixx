@@ -20,6 +20,7 @@ import type {
   InventoryCustomValueWithField,
   InventoryItemPhoto,
   InventoryItemRow,
+  InventoryItemRowWithCustomValues,
   InventoryItemStatus,
   InventoryListRow,
 } from './inventory.types.js';
@@ -37,7 +38,17 @@ type ValueKey = 'text' | 'number' | 'date' | 'boolean';
 export class InventoryItemsService {
   constructor(private readonly db: DatabaseService) {}
 
-  /** Items for a specific list, with optional filters + custom values */
+  /**
+   * Items for a specific list, with optional filters.
+   *
+   * Returns the canonical ADR-007 paginated envelope `{ items, pagination }`
+   * (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.8a + §D17). Each item row
+   * carries its `customValues` inline — no sibling `customValuesByItem` map —
+   * so `ResponseInterceptor.isPaginatedResponse` recognises the wrapper and
+   * emits `meta.pagination` cleanly. Pre-Phase-4.8a returned a flat
+   * `{ items, total, customValuesByItem }` shape that bypassed the interceptor
+   * entirely (Gate 1 `'pagination' in data` failed → no `meta.pagination`).
+   */
   async findByList(
     listId: string,
     filters: {
@@ -47,9 +58,8 @@ export class InventoryItemsService {
       limit: number;
     },
   ): Promise<{
-    items: InventoryItemRow[];
-    total: number;
-    customValuesByItem: Record<string, InventoryCustomValueWithField[]>;
+    items: InventoryItemRowWithCustomValues[];
+    pagination: { page: number; limit: number; total: number; totalPages: number };
   }> {
     const { where, params, paramIndex } = this.buildItemFilters(listId, filters);
 
@@ -60,7 +70,7 @@ export class InventoryItemsService {
     const total = Number(countRows[0]?.count ?? '0');
 
     const offset = (filters.page - 1) * filters.limit;
-    const items = await this.db.tenantQuery<InventoryItemRow>(
+    const rows = await this.db.tenantQuery<InventoryItemRow>(
       `SELECT i.*,
               thumb.file_path AS thumbnail_path,
               NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS created_by_name
@@ -78,10 +88,25 @@ export class InventoryItemsService {
     );
 
     const customValuesByItem = await this.loadCustomValuesByItems(
-      items.map((i: InventoryItemRow) => i.id),
+      rows.map((i: InventoryItemRow) => i.id),
     );
 
-    return { items, total, customValuesByItem };
+    // Denormalise the batch lookup map into per-row `customValues` so the
+    // response stays purely `{ items, pagination }` for the ADR-007 envelope.
+    const items: InventoryItemRowWithCustomValues[] = rows.map(
+      (row: InventoryItemRow): InventoryItemRowWithCustomValues => ({
+        ...row,
+        customValues: customValuesByItem[row.id] ?? [],
+      }),
+    );
+
+    // totalPages math mirrors Phase 3.1 dummy-users + 4.5a KVP + 4.7a work-orders precedent.
+    const totalPages = total === 0 ? 0 : Math.ceil(total / filters.limit);
+
+    return {
+      items,
+      pagination: { page: filters.page, limit: filters.limit, total, totalPages },
+    };
   }
 
   /** Single item by UUID — used as QR code target */

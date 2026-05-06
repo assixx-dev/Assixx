@@ -41,18 +41,11 @@ function scrollToShowMenu(
 }
 
 function resetScroll(body: HTMLElement, modal: HTMLElement | null): void {
-  const removeStyles = (): void => {
-    body.style.paddingBottom = '';
-    if (modal) modal.style.height = '';
-  };
-
-  if (body.scrollTop === 0) {
-    removeStyles();
-    return;
-  }
-
-  body.scrollTo({ top: 0, behavior: 'smooth' });
-  body.addEventListener('scrollend', removeStyles, { once: true });
+  // WHY: Keep the user's scroll position when the dropdown closes.
+  // Previously this scrolled back to top: 0, which yanked the user away from
+  // their context after every dropdown interaction in long modals.
+  body.style.paddingBottom = '';
+  if (modal) modal.style.height = '';
 }
 
 function onDropdownClassChange(menu: HTMLElement): void {
