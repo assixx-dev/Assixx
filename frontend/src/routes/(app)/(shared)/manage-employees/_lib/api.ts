@@ -4,7 +4,6 @@
 
 import { getApiClient, ApiError } from '$lib/utils/api-client';
 import { extractArray } from '$lib/utils/api-response';
-import { buildLoginUrl } from '$lib/utils/build-apex-url';
 import { createLogger } from '$lib/utils/logger';
 import { handleSessionExpired } from '$lib/utils/session-expired.js';
 
@@ -62,31 +61,22 @@ function extractCreatedResult(result: unknown): SaveResult {
 }
 
 // =============================================================================
-// AUTH HELPERS
-// =============================================================================
-
-/**
- * Check if user is authenticated
- */
-export function checkAuth(): boolean {
-  if (typeof localStorage === 'undefined') return false;
-  const token = localStorage.getItem('accessToken');
-  if (token === null) {
-    // ADR-050 Amendment 2026-04-22: cross-origin hard-nav to apex login.
-    window.location.href = buildLoginUrl('session-expired');
-    return false;
-  }
-  return true;
-}
-
-// =============================================================================
 // API FUNCTIONS
 // =============================================================================
+//
+// NOTE: NO checkAuth() wrapper here. The previous `checkAuth()` (removed
+// 2026-05-06) probed `localStorage.getItem('accessToken')` — but the
+// access-token is an HttpOnly cookie per ADR-046 §"3-cookie invariant" and
+// is NEVER stored in localStorage. checkAuth() therefore returned false on
+// every call and hard-redirected the user to apex `/login?session=expired`
+// the moment they hit Save — fresh-token-logout regression. The api-client
+// already handles 401 + refresh + apex-redirect cascade centrally
+// (api-client.ts handleAuthenticationError + token-manager redirectToLogin),
+// so per-route guards are redundant AND incorrect against the HttpOnly
+// cookie design. See ADR-005 (auth strategy) + ADR-046 (cookie shape).
 
 /** Load employees from API */
 export async function loadEmployees(): Promise<Employee[]> {
-  if (!checkAuth()) return [];
-
   try {
     const result = await apiClient.get<Employee[]>(API_ENDPOINTS.EMPLOYEES);
     const employees = extractArray<Employee>(result);
@@ -125,8 +115,6 @@ export async function saveEmployee(
   payload: EmployeePayload,
   editId: number | null,
 ): Promise<SaveResult> {
-  if (!checkAuth()) throw new Error('Not authenticated');
-
   const isEdit = editId !== null;
   const endpoint = isEdit ? API_ENDPOINTS.user(editId) : API_ENDPOINTS.USERS;
 
@@ -167,7 +155,6 @@ export async function removeTeamMember(userId: number, teamId: number): Promise<
 
 /** Delete employee */
 export async function deleteEmployee(employeeId: number): Promise<void> {
-  if (!checkAuth()) throw new Error('Not authenticated');
   await apiClient.delete(API_ENDPOINTS.user(employeeId));
 }
 
@@ -182,7 +169,6 @@ export async function updateEmployeeAvailability(
     availabilityNotes?: string;
   },
 ): Promise<void> {
-  if (!checkAuth()) throw new Error('Not authenticated');
   await apiClient.put(API_ENDPOINTS.user(employeeId), availability);
 }
 
@@ -214,7 +200,6 @@ export async function syncTeamMemberships(
 
 /** Upgrade employee role to admin */
 export async function upgradeToAdmin(userId: number): Promise<void> {
-  if (!checkAuth()) throw new Error('Not authenticated');
   await apiClient.put(API_ENDPOINTS.user(userId), { role: 'admin' });
 }
 

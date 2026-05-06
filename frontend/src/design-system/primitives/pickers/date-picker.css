@@ -47,6 +47,7 @@
 .date-picker__input {
   /* Remove browser default styling */
   appearance: none;
+  backdrop-filter: blur(10px);
 
   transition:
     border-color var(--duration-fast) var(--ease-standard),

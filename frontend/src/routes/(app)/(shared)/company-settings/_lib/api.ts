@@ -6,14 +6,13 @@
 import { getApiClient } from '$lib/utils/api-client';
 import { createLogger } from '$lib/utils/logger';
 
-import { STORAGE_KEYS, MESSAGES } from './constants';
+import { MESSAGES } from './constants';
 
 import type {
   DeletionStatusData,
   DeletionQueueResponse,
   DeletionStatusResponse,
   RootUsersResponse,
-  JwtPayload,
   ShiftTimeData,
 } from './types';
 
@@ -21,46 +20,13 @@ const log = createLogger('CompanySettingsApi');
 
 const apiClient = getApiClient();
 
-/** Parse JWT token to extract payload */
-export function parseJwtPayload(token: string): JwtPayload | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) {
-      return null;
-    }
-    const parsed: unknown = JSON.parse(atob(parts[1]));
-    if (typeof parsed === 'object' && parsed !== null && 'role' in parsed) {
-      return parsed as JwtPayload;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Get access token from localStorage */
-export function getAccessToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem(STORAGE_KEYS.accessToken);
-}
-
-/** Check if user is authenticated and has root role */
-export function checkAuthRole(): {
-  isAuthenticated: boolean;
-  role: string | null;
-} {
-  const token = getAccessToken();
-  if (token === null || token === '') {
-    return { isAuthenticated: false, role: null };
-  }
-
-  const payload = parseJwtPayload(token);
-  if (payload === null) {
-    return { isAuthenticated: false, role: null };
-  }
-
-  return { isAuthenticated: true, role: payload.role };
-}
+// NOTE: previous `parseJwtPayload`, `getAccessToken`, and `checkAuthRole`
+// (removed 2026-05-06) read `localStorage.getItem(STORAGE_KEYS.accessToken)`,
+// but `STORAGE_KEYS` exposes `ACCESS_TOKEN` (UPPER_SNAKE), not `accessToken`
+// — so the lookup was `localStorage.getItem(undefined)` and always returned
+// null. The functions had zero external callers (dead code). Auth identity
+// is centralised in `apiClient` + the SSR `parent()` user load. See
+// ADR-005 (auth strategy) + ADR-046 (cookie shape).
 
 /** Load pending deletion status */
 export async function loadDeletionStatus(): Promise<DeletionStatusData | null> {

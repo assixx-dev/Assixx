@@ -195,11 +195,18 @@ export interface CustomValueWithField {
   valueBoolean: boolean | null;
 }
 
-/** Paginated items response with custom values */
-export interface ItemsPage {
-  items: InventoryItem[];
-  total: number;
-  customValuesByItem: Record<string, CustomValueWithField[]>;
+/**
+ * Item enriched with its custom values, as returned by the list view.
+ *
+ * Mirrors backend `InventoryItemRowWithCustomValues` post-Phase-4.8a
+ * (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §D17). The backend embeds
+ * `customValues` per row so the response can ship the canonical ADR-007
+ * envelope `{ items, pagination }` without a sibling `customValuesByItem`
+ * map. The bare `InventoryItem` stays for `findByUuid` / detail / form
+ * paths that don't need the join.
+ */
+export interface InventoryItemWithCustomValues extends InventoryItem {
+  customValues: CustomValueWithField[];
 }
 
 /** Form data for creating/editing an item */

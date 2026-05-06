@@ -2,8 +2,6 @@
 // DOCUMENTS EXPLORER - API FUNCTIONS
 // =============================================================================
 
-import { browser } from '$app/environment';
-
 import { getApiClient } from '$lib/utils/api-client';
 import { createLogger } from '$lib/utils/logger';
 import { fetchCurrentUser as fetchSharedUser } from '$lib/utils/user-service';
@@ -254,13 +252,29 @@ function buildUploadFormData(formData: UploadFormData): FormData {
   return data;
 }
 
-/** Upload a document */
+/**
+ * Upload a document.
+ *
+ * Uses XMLHttpRequest (not `fetch`) because the upload progress event is
+ * the simplest way to drive the frontend progress bar — `fetch` upload
+ * progress requires the (still-uncoupled) Streams API and a request body
+ * stream, which is not worth the complexity here.
+ *
+ * Auth: `withCredentials = true` ensures the HttpOnly `accessToken` cookie
+ * (ADR-046 §"3-cookie invariant") is sent with the upload, mirroring
+ * `apiClient`'s `credentials: 'include'`. Same-origin browsers send cookies
+ * even without this flag, but setting it explicitly future-proofs against
+ * cross-origin deployment (e.g. CDN-hosted frontend) and matches the rest
+ * of the codebase. Previous impl read `localStorage.getItem('accessToken')`
+ * and conditionally set a `Bearer` header — but the access-token is HttpOnly
+ * (never in localStorage), so the header was never set; auth happened to
+ * work via the same-origin cookie fallback. Cleanup 2026-05-06.
+ */
 export async function uploadDocument(
   formData: UploadFormData,
   onProgress?: (progress: number) => void,
 ): Promise<Document> {
   const data = buildUploadFormData(formData);
-  const token = browser ? localStorage.getItem('accessToken') : null;
   const xhr = new XMLHttpRequest();
 
   return await new Promise((resolve, reject) => {
@@ -288,10 +302,7 @@ export async function uploadDocument(
     });
 
     xhr.open('POST', '/api/v2/documents');
-
-    if (token !== null) {
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    }
+    xhr.withCredentials = true;
     xhr.send(data);
   });
 }
