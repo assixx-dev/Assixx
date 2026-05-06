@@ -77,6 +77,9 @@ function createMockAccessService() {
   return {
     checkUnrestrictedAccess: vi.fn().mockResolvedValue(true),
     fetchSurveysByAccessLevel: vi.fn().mockResolvedValue([]),
+    // Phase 4.10a (2026-05-06): count helper added alongside fetch — listSurveys
+    // runs both in parallel via Promise.all to populate `meta.pagination.total`.
+    countSurveysByAccessLevel: vi.fn().mockResolvedValue(0),
     attachAssignmentsToSurveys: vi.fn().mockResolvedValue(undefined),
     getManageableSurveyIds: vi.fn().mockResolvedValue(new Set()),
     checkSurveyAccess: vi.fn().mockResolvedValue(undefined),
@@ -645,18 +648,24 @@ describe('SurveysService', () => {
   // =============================================================
 
   describe('listSurveys', () => {
+    // Phase 4.10a (2026-05-06): return shape changed `unknown[]` → PaginatedSurveys
+    // (`{items, pagination}`). All existing assertions migrated to read `result.items`;
+    // count mock added alongside fetch mock to populate `pagination.total`.
+
     it('returns surveys with canManage flags', async () => {
       const survey = createMockDbSurvey({ id: 1 });
       mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([survey]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(1);
 
       const result = await mocks.service.listSurveys(1, 5, 'admin', {});
 
-      expect(result).toHaveLength(1);
-      expect(result[0]).toHaveProperty('canManage');
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toHaveProperty('canManage');
     });
 
     it('applies pagination defaults', async () => {
       mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(0);
 
       await mocks.service.listSurveys(1, 5, 'admin', {});
 
@@ -674,6 +683,7 @@ describe('SurveysService', () => {
 
     it('passes custom page and limit', async () => {
       mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(0);
 
       await mocks.service.listSurveys(1, 5, 'admin', {
         page: 3,
@@ -695,6 +705,7 @@ describe('SurveysService', () => {
 
     it('forwards search query to access service (Phase 1.2a-B)', async () => {
       mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(0);
 
       await mocks.service.listSurveys(1, 5, 'admin', { search: 'safety' });
 
@@ -714,23 +725,113 @@ describe('SurveysService', () => {
       const survey = createMockDbSurvey({ id: 1 });
       mocks.mockAccessService.checkUnrestrictedAccess.mockResolvedValueOnce(false);
       mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([survey]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(1);
       mocks.mockAccessService.getManageableSurveyIds.mockResolvedValueOnce(new Set([1]));
 
       const result = await mocks.service.listSurveys(1, 5, 'employee', {});
 
       expect(mocks.mockAccessService.getManageableSurveyIds).toHaveBeenCalledWith([1], 1, 5);
-      expect(result[0]).toHaveProperty('canManage', true);
+      expect(result.items[0]).toHaveProperty('canManage', true);
     });
 
     it('sets canManage=true for all when manage=true', async () => {
       const survey = createMockDbSurvey({ id: 1 });
       mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([survey]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(1);
 
       const result = await mocks.service.listSurveys(1, 5, 'admin', {
         manage: true,
       });
 
-      expect(result[0]).toHaveProperty('canManage', true);
+      expect(result.items[0]).toHaveProperty('canManage', true);
+    });
+
+    // =============================================================
+    // Phase 4.10a (2026-05-06) — §D15 broken-by-shape rebuild tests
+    // =============================================================
+    // These tests pin the `pagination` block contract that the FE
+    // (manage-surveys 4.10b) and the response interceptor (ADR-007)
+    // depend on. Mirrors KVP §D9 fix in Session 8a + work-orders 4.7a.
+
+    it('forwards count query with same access flags as fetch (Promise.all parallelism)', async () => {
+      mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(0);
+
+      await mocks.service.listSurveys(1, 5, 'admin', {
+        status: 'active',
+        search: 'safety',
+        manage: true,
+      });
+
+      expect(mocks.mockAccessService.countSurveysByAccessLevel).toHaveBeenCalledWith(
+        1, // tenantId
+        5, // userId
+        'active', // status
+        true, // hasUnrestrictedAccess (admin role mock returns true)
+        true, // isManageMode (manage=true)
+        'safety', // search
+      );
+    });
+
+    it('returns pagination block with page/limit/total/totalPages (canonical envelope)', async () => {
+      mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(42);
+
+      const result = await mocks.service.listSurveys(1, 5, 'admin', { page: 1, limit: 20 });
+
+      expect(result.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 42,
+        totalPages: 3, // ceil(42 / 20)
+      });
+    });
+
+    it('computes totalPages math correctly for ?page=2&limit=10 with total=15', async () => {
+      // §D9 KVP precedent (Session 8a): pin the slicing math to prevent silent
+      // off-by-one regressions. With total=15 and limit=10: totalPages=2,
+      // page-2 starts at offset 10 → returns items 11..15 (5 items).
+      mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce(
+        Array.from({ length: 5 }, (_, i) => createMockDbSurvey({ id: i + 11 })),
+      );
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(15);
+
+      const result = await mocks.service.listSurveys(1, 5, 'admin', { page: 2, limit: 10 });
+
+      expect(mocks.mockAccessService.fetchSurveysByAccessLevel).toHaveBeenCalledWith(
+        1,
+        5,
+        undefined,
+        10, // limit
+        10, // offset = (2-1) * 10
+        true,
+        false,
+        undefined,
+      );
+      expect(result.items).toHaveLength(5);
+      expect(result.pagination).toEqual({
+        page: 2,
+        limit: 10,
+        total: 15,
+        totalPages: 2, // ceil(15 / 10)
+      });
+    });
+
+    it('returns totalPages=0 when total=0 (edge case)', async () => {
+      // Mirrors Phase 3.1 dummy-users + Phase 4.5a KVP + Phase 4.7a work-orders:
+      // Math.ceil(0 / N) === 0 ambiguity vs. "1 empty page" — explicit 0 wins.
+      mocks.mockAccessService.fetchSurveysByAccessLevel.mockResolvedValueOnce([]);
+      mocks.mockAccessService.countSurveysByAccessLevel.mockResolvedValueOnce(0);
+
+      const result = await mocks.service.listSurveys(1, 5, 'admin', { page: 1, limit: 20 });
+
+      expect(result.items).toHaveLength(0);
+      expect(result.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      });
     });
   });
 

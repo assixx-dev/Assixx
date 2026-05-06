@@ -475,6 +475,121 @@ export class SurveyAccessService {
     );
   }
 
+  // ==========================================================================
+  // PRIVATE: COUNT QUERIES (Phase 4.10a — §D15 broken-by-shape rebuild, 2026-05-06)
+  //
+  // Mirror the three fetch helpers above. Each returns `COUNT(*)` of surveys
+  // matching the same WHERE clause as its fetch counterpart, MINUS LIMIT/OFFSET.
+  // Run in parallel with the fetch (Promise.all) inside the service facade
+  // — no extra round-trip latency in practice (PG plan caches the visibility
+  // sub-query). `::integer` cast avoids the pg bigint→string drift that
+  // work-orders 4.7a had to handle defensively (line 264 precedent: notification
+  // count uses `COUNT(DISTINCT s.id)::integer`).
+  // ==========================================================================
+
+  async countSurveysByAccessLevel(
+    tenantId: number,
+    userId: number,
+    status: string | undefined,
+    hasUnrestrictedAccess: boolean,
+    isManageMode: boolean,
+    search?: string,
+  ): Promise<number> {
+    if (hasUnrestrictedAccess) {
+      return await this.countAllSurveysUnrestricted(tenantId, status, search);
+    }
+    if (isManageMode) {
+      return await this.countAllSurveysManageable(tenantId, userId, status, search);
+    }
+    return await this.countAllSurveysWithVisibility(tenantId, userId, status, search);
+  }
+
+  /** Count helper: unrestricted access (root or has_full_access=true) */
+  private async countAllSurveysUnrestricted(
+    tenantId: number,
+    status: string | undefined,
+    search?: string,
+  ): Promise<number> {
+    const params: unknown[] = [tenantId];
+    let statusClause = '';
+    if (status !== undefined) {
+      statusClause = ` AND s.status = $${params.length + 1}`;
+      params.push(status);
+    }
+    let searchClause = '';
+    if (search !== undefined && search !== '') {
+      const idx = params.length + 1;
+      searchClause = ` AND (s.title ILIKE $${idx} OR s.description ILIKE $${idx})`;
+      params.push(`%${search}%`);
+    }
+    const row = await this.db.tenantQueryOne<{ count: number }>(
+      `SELECT COUNT(*)::integer AS count FROM surveys s
+       WHERE s.tenant_id = $1${statusClause}${searchClause}`,
+      params,
+    );
+    return row?.count ?? 0;
+  }
+
+  /** Count helper: visibility-filtered (admins without full access + employees) */
+  private async countAllSurveysWithVisibility(
+    tenantId: number,
+    userId: number,
+    status: string | undefined,
+    search?: string,
+  ): Promise<number> {
+    const params: unknown[] = [tenantId, userId];
+    let statusClause = '';
+    if (status !== undefined) {
+      statusClause = ` AND s.status = $${params.length + 1}`;
+      params.push(status);
+    }
+    let searchClause = '';
+    if (search !== undefined && search !== '') {
+      const idx = params.length + 1;
+      searchClause = ` AND (s.title ILIKE $${idx} OR s.description ILIKE $${idx})`;
+      params.push(`%${search}%`);
+    }
+    const deputyScope = await this.orgSettings.getDeputyHasLeadScope(tenantId);
+    const visibilityClause = this.buildVisibilityClause('$1', '$2', deputyScope);
+    const row = await this.db.tenantQueryOne<{ count: number }>(
+      `SELECT COUNT(*)::integer AS count FROM surveys s
+       WHERE s.tenant_id = $1
+       AND ${visibilityClause}${statusClause}${searchClause}`,
+      params,
+    );
+    return row?.count ?? 0;
+  }
+
+  /** Count helper: management-level (creator OR lead of assigned org unit) */
+  private async countAllSurveysManageable(
+    tenantId: number,
+    userId: number,
+    status: string | undefined,
+    search?: string,
+  ): Promise<number> {
+    const params: unknown[] = [tenantId, userId];
+    let statusClause = '';
+    if (status !== undefined) {
+      statusClause = ` AND s.status = $${params.length + 1}`;
+      params.push(status);
+    }
+    let searchClause = '';
+    if (search !== undefined && search !== '') {
+      const idx = params.length + 1;
+      searchClause = ` AND (s.title ILIKE $${idx} OR s.description ILIKE $${idx})`;
+      params.push(`%${search}%`);
+    }
+    const deputyScope = await this.orgSettings.getDeputyHasLeadScope(tenantId);
+    const managementClause = this.buildManagementVisibilityClause('$1', '$2', deputyScope);
+    const row = await this.db.tenantQueryOne<{ count: number }>(
+      `SELECT COUNT(*)::integer AS count FROM surveys s
+       WHERE s.tenant_id = $1
+       AND ${managementClause}${statusClause}${searchClause}`,
+      params,
+    );
+    return row?.count ?? 0;
+  }
+
   /**
    * Management-level visibility: only surveys the admin can manage.
    * Creator OR lead of assigned org unit (with hierarchy inheritance).

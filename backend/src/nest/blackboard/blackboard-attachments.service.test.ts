@@ -33,12 +33,10 @@ function createMockDocumentsService() {
   return {
     createDocument: vi.fn().mockResolvedValue({ id: 1, filename: 'test.pdf' }),
     // §D18 (2026-05-06): wrapper key renamed `documents` → `items`.
-    listDocuments: vi
-      .fn()
-      .mockResolvedValue({
-        items: [],
-        pagination: { page: 1, limit: 100, total: 0, totalPages: 0 },
-      }),
+    listDocuments: vi.fn().mockResolvedValue({
+      items: [],
+      pagination: { page: 1, limit: 100, total: 0, totalPages: 0 },
+    }),
     getDocumentContent: vi.fn().mockResolvedValue({
       content: Buffer.from('data'),
       originalName: 'test.pdf',

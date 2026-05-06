@@ -55,6 +55,55 @@ describe('Surveys: List Surveys', () => {
       existingSurveyId = body.data[0].id as number;
     }
   });
+
+  // Phase 4.10a (2026-05-06) — §D15 broken-by-shape rebuild assertions.
+  // Pre-rebuild: controller returned `Promise<unknown[]>` and the response
+  // interceptor wrapped as `{success, data: Survey[]}` with no `meta.pagination`.
+  // Post-rebuild: controller returns `{items, pagination}`, interceptor extracts
+  // `items` to top-level `data` and `pagination` to `meta.pagination`. The wire
+  // `data` field is unchanged shape (still `Survey[]`); only `meta.pagination` is
+  // new. Existing `(shared)/surveys/+page.server.ts` consumer continues to work
+  // unchanged (reads `data` as flat array). Mirrors KVP §D9 + work-orders §D15
+  // canonical-envelope assertions.
+
+  it('should ship canonical pagination envelope (page, limit, total, totalPages)', async () => {
+    const res = await fetch(`${BASE_URL}/surveys`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(body.meta).toBeDefined();
+    expect(body.meta?.pagination).toMatchObject({
+      page: expect.any(Number),
+      limit: expect.any(Number),
+      total: expect.any(Number),
+      totalPages: expect.any(Number),
+    });
+    // Default page=1 + limit=10 — DTO PaginationSchema sets limit=10 (common.schema.ts);
+    // the service-level `?? 20` fallback in listSurveys is dead-code defensive (DTO
+    // always injects a value before the service runs). Service-default 20 only fires
+    // when the service is called directly (e.g. unit tests bypassing the DTO pipe).
+    expect(body.meta?.pagination.page).toBe(1);
+    expect(body.meta?.pagination.limit).toBe(10);
+  });
+
+  it('should respect ?page=1&limit=5 and emit correct pagination math', async () => {
+    const res = await fetch(`${BASE_URL}/surveys?page=1&limit=5`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(body.data)).toBe(true);
+    // Slice cap matches limit (regardless of how many surveys exist in tenant)
+    expect((body.data as unknown[]).length).toBeLessThanOrEqual(5);
+    expect(body.meta?.pagination.page).toBe(1);
+    expect(body.meta?.pagination.limit).toBe(5);
+    // totalPages = ceil(total/5) when total > 0; 0 when total === 0.
+    const total = body.meta?.pagination.total as number;
+    const totalPages = body.meta?.pagination.totalPages as number;
+    expect(totalPages).toBe(total === 0 ? 0 : Math.ceil(total / 5));
+  });
 });
 
 // ---- seq: 2 -- Create Survey (Admin) ------------------------------------------

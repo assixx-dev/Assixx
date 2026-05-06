@@ -76,7 +76,16 @@ export class SurveysController {
 
   /**
    * GET /surveys
-   * List surveys based on user role
+   * List surveys based on user role.
+   *
+   * Phase 4.10a (2026-05-06): return type changed from `Promise<unknown[]>` to
+   * `Promise<PaginatedSurveys>` (§D15 broken-by-shape rebuild). The response
+   * interceptor (ADR-007) extracts `items` to top-level `data` and `pagination`
+   * to `meta.pagination`, so the wire-format `data` field stays as `Survey[]` —
+   * existing consumers (`(shared)/surveys/+page.server.ts`) continue to work
+   * unchanged. The new `meta.pagination` block enables `manage-surveys` 4.10b
+   * URL-state migration. `ReturnType<...>` keeps the service as the SSOT
+   * (matches work-orders 4.7a controller convention).
    */
   @Get()
   @RequirePermission(SURVEY_ADDON, SURVEY_MANAGE, 'canRead')
@@ -84,7 +93,7 @@ export class SurveysController {
     @Query() query: ListSurveysQueryDto,
     @CurrentUser() user: NestAuthUser,
     @TenantId() tenantId: number,
-  ): Promise<unknown[]> {
+  ): Promise<ReturnType<SurveysService['listSurveys']>> {
     return await this.surveysService.listSurveys(tenantId, user.id, user.role, {
       status: query.status,
       search: query.search,
