@@ -570,6 +570,157 @@ describe('Work Orders: Calendar', () => {
 });
 
 // ============================================================================
+// seq: 10b -- Pagination (Step 5.1)
+// ============================================================================
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14c, 2026-05-06):
+// 4 mandated assertions per migrated endpoint (slice / cross-page search /
+// combined / RLS sanity), mirroring KVP §14b precedent + ONE §D13 fold-parity
+// assertion proving /work-orders/my honors the same envelope (both routes
+// share buildPaginatedList per work-orders.service.ts:299/307).
+// Search columns: wo.title OR wo.description (work-orders.service.ts:157).
+// 22 = 2 × limit + 2 → totalPages >= 3, so "matches beyond page 1" is
+// structural, not coincidental. assigneeUuids=[testUserUuid] makes every
+// seed visible in BOTH /work-orders (admin) AND /work-orders/my (assignee
+// filter) — proves the §D13 fold against real data, not just envelope shape.
+// Cleanup: PATCH archive sets isActive=3 → seeds drop from default isActive=1
+// listings (no hard-delete endpoint exposed for work-orders, deliberate
+// per the soft-delete contract).
+// Placed BEFORE seq:11 Archive so the file's main workOrderUuid is still
+// active.
+describe('Work Orders: Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededUuids: string[] = [];
+  let testUserUuid: string;
+
+  beforeAll(async () => {
+    // §D13 fold parity needs the test user as assignee on every seed so
+    // /my returns the same set as the admin /work-orders route.
+    const meRes = await fetch(`${BASE_URL}/users/me`, {
+      headers: authOnly(auth.authToken),
+    });
+    const meBody = (await meRes.json()) as JsonBody;
+    testUserUuid = meBody.data.uuid as string;
+
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/work-orders`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          title: `${tag}_${String(i).padStart(2, '0')}`,
+          description: 'Pagination seed — archived by afterAll',
+          priority: 'medium',
+          sourceType: 'manual',
+          dueDate: '2099-12-31',
+          assigneeUuids: [testUserUuid],
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: WO ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededUuids.push(body.data.uuid as string);
+    }
+  });
+
+  afterAll(async () => {
+    for (const uuid of seededUuids) {
+      await fetch(`${BASE_URL}/work-orders/${uuid}/archive`, {
+        method: 'PATCH',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({}),
+      });
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/work-orders?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${BASE_URL}/work-orders?search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${BASE_URL}/work-orders?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(`${BASE_URL}/work-orders?search=${tag}&limit=100`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedUuids = (body.data as Array<{ uuid: string }>)
+      .map((d) => d.uuid)
+      .sort((a, b) => a.localeCompare(b));
+    const expectedUuids = [...seededUuids].sort((a, b) => a.localeCompare(b));
+    expect(returnedUuids).toEqual(expectedUuids);
+  });
+
+  // §D13 fold parity: /work-orders/my shares buildPaginatedList with the admin
+  // route — proves the canonical envelope + search + slice work identically
+  // for the assignee-filtered route. Without this, the §D13 fold lesson
+  // ("envelope rebuild covered both routes by virtue of helper sharing")
+  // is asserted only by code inspection, not by integration test.
+  it('§D13 fold parity: /work-orders/my respects search + pagination', async () => {
+    const res = await fetch(`${BASE_URL}/work-orders/my?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+});
+
+// ============================================================================
 // seq: 11 -- Archive Work Order (last — cleans up test data)
 // ============================================================================
 
