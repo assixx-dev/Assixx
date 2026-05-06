@@ -89,13 +89,17 @@ export async function loadAssets(): Promise<Asset[]> {
 }
 
 /**
- * Fetch team members from /teams/:id/members endpoint
- * Returns array of member objects with id
+ * Fetch team members from `/teams/:id/members`. Backend returns the full
+ * `TeamMember[]` (controller signature `Promise<TeamMember[]>`) so we
+ * widen the return type — needed by Phase 4.12b to build `PickerOption`
+ * chips (firstName/lastName/email) when entering edit mode for the
+ * member multi-picker. Pre-4.12b code only consumed `.id`, hence the
+ * narrower historical return type.
  */
-export async function fetchTeamMembers(teamId: number): Promise<{ id: number }[]> {
+export async function fetchTeamMembers(teamId: number): Promise<TeamMember[]> {
   try {
     const result: unknown = await apiClient.get(API_ENDPOINTS.teamMembers(teamId));
-    return extractArray<{ id: number }>(result);
+    return extractArray<TeamMember>(result);
   } catch (err: unknown) {
     log.error({ err }, 'Error fetching team members');
     return [];
@@ -278,9 +282,13 @@ export function buildTeamPayload(formData: {
 }
 
 /**
- * Assign a single hall to a team (or clear assignment)
+ * @deprecated Removed by migration 20260505221345432_simplify-department-hall-1to1.
+ *
+ * Teams inherit the hall from their parent department's hall_id (1:1 model).
+ * To change a team's hall, update the parent department's hall via
+ * PUT /departments/:id/hall. This stub remains as a no-op for legacy callers
+ * and can be deleted in a follow-up cleanup PR.
  */
-export async function assignTeamHall(teamId: number, hallId: number | null): Promise<void> {
-  const hallIds = hallId !== null ? [hallId] : [];
-  await apiClient.post(`${API_ENDPOINTS.TEAMS}/${teamId}/halls`, { hallIds });
+export async function assignTeamHall(_teamId: number, _hallId: number | null): Promise<void> {
+  // Intentional no-op — see deprecation note above.
 }

@@ -2,12 +2,10 @@
 <html lang="de" class="dark">
   <head>
     <meta charset="utf-8" />
-    <link
-      rel="icon"
-      type="image/png"
-      sizes="192x192"
-      href="%sveltekit.assets%/favicon-192x192.png"
-    />
+    <!-- 192×192 PNG: nur via site.webmanifest (PWA-Install-Icon).
+         Kein zusätzliches <link rel="icon" sizes="192x192">, sonst fetcht der
+         Browser dieselbe Datei zweimal (Link-Tag + Manifest-Parse) — siehe
+         Network-Audit 2026-05-05. Tab-Icon liefert das 32×32-PNG/48×48-ICO. -->
     <link rel="icon" type="image/png" sizes="32x32" href="%sveltekit.assets%/favicon-32x32.png" />
     <link rel="icon" sizes="48x48" href="%sveltekit.assets%/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="%sveltekit.assets%/apple-touch-icon.png" />
@@ -15,37 +13,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#121212" />
 
-    <!-- Google Fonts Performance: dns-prefetch + preconnect (Best Practice 2025) -->
-    <!-- dns-prefetch: Early DNS lookup (~20ms saved) -->
-    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
-    <link rel="dns-prefetch" href="https://fonts.gstatic.com" />
-    <!-- preconnect: Full connection setup (DNS + TCP + TLS, ~100-200ms saved) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-
-    <!-- Outfit Font - Main Typography (preload for critical above-the-fold) -->
-    <link
-      rel="preload"
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap"
-      as="style"
-    />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap"
-      rel="stylesheet"
-    />
-
-    <!-- Material Symbols - Google Icons (Optimized: subset + display=block) -->
-    <!-- Icons: RoleSwitch (manage_accounts, person_apron, supervisor_account), rate-limit (hourglass_check) -->
-    <!-- Landing/Security: business, check_circle, dns, lock, policy, shield_person, verified_user -->
-    <!-- Roadmap (/roadmap): arrow_right, event, flag_circle, info, science, shield, verified -->
-    <!-- (2026-04-15: dropped block + visibility after Security Bento refactor merged
-         Transparenz+Privacy into a single Datensouveränität cell; added shield_person.
-         2026-04-29: added roadmap-page icon set so /roadmap glyphs render instead of
-         falling back to literal text — see FEAT_BETA_HOSTING_MASTERPLAN §5 / Roadmap.) -->
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght@24,400&icon_names=arrow_right,business,check_circle,dns,event,flag_circle,hourglass_check,info,lock,manage_accounts,person_apron,policy,science,shield,shield_person,supervisor_account,verified,verified_user&display=block"
-    />
+    <!-- Web Fonts (Outfit + Material Symbols Outlined): SELF-HOSTED via
+         design-system/tokens/fonts.css using @fontsource(-variable). Vite
+         resolves the npm packages and serves WOFF2 from same origin → ZERO
+         third-party transmission to fonts.googleapis.com / fonts.gstatic.com.
+         WHY: LG München I, 20.01.2022 (3 O 17493/20) — direct loading from
+         Google Fonts transmits user IPs without consent and violates DSGVO
+         Art. 6. dns-prefetch / preconnect to Google Fonts removed accordingly.
+         TRADE-OFF Material Symbols: fontsource ships full latin subset
+         (~317 KB WOFF2) with all glyphs, vs. Google's URL-icon-subset which
+         only sent the 17 used glyphs (~5–10 KB). Subsetting via pyftsubset
+         tracked as future optimization. -->
 
     <!-- FOUT Prevention: Hide Material Icons until font loads (Font Loading API) -->
     <!-- Problem: Even with display=block, browser may briefly show text before CSS parses -->

@@ -79,9 +79,11 @@ export class DomainsController {
 
   /**
    * `POST /domains` — add a new domain with `status='pending'`. Response
-   * includes `verificationInstructions` (TXT host + value) ONLY on this
-   * immediate add-response per §0.2.5 #10; subsequent list/verify/patch
-   * responses never re-expose the token.
+   * includes `verificationInstructions` (TXT host + value). The same
+   * instructions are also returned by GET /domains and GET-one for any
+   * non-verified row (ADR-049 amendment 2026-05-04 — replaces the original
+   * one-shot policy from masterplan §0.2.5 #10 so users have a recovery
+   * path after panel dismiss / reload). Verified rows omit the field.
    */
   @Post()
   @Roles('root')

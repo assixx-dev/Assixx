@@ -81,6 +81,7 @@ export const load: PageServerLoad = async ({ cookies, fetch, locals, url }) => {
 
   // 4. Process dashboard data
   const stats: DashboardData = dashboardData ?? {
+    rootCount: 0,
     adminCount: 0,
     employeeCount: 0,
     totalUsers: 0,

@@ -18,11 +18,10 @@ export const ZOOM_CONFIG = {
   STEP: 10,
 } as const;
 
-// ============================================================================
-// Pagination
-// ============================================================================
-
-export const ENTRIES_PER_PAGE = 12;
+// NOTE: ENTRIES_PER_PAGE deleted in FEAT_SERVER_DRIVEN_PAGINATION §4.6
+// (Session 8c). Page size now lives next to its consumer — see
+// `+page.server.ts` `PAGE_SIZE` constant. Mirrors the manage-dummies /
+// manage-employees reference impls.
 
 // ============================================================================
 // Priority Labels & Classes

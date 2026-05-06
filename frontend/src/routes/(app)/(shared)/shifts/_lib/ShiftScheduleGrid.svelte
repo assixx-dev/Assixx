@@ -329,7 +329,6 @@ Beispiele:
   }
 
   .day-header {
-    backdrop-filter: blur(5px);
     border: var(--glass-border);
     border-radius: var(--radius-xl);
 
@@ -356,7 +355,6 @@ Beispiele:
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    backdrop-filter: blur(5px);
     border: var(--glass-border);
     border-radius: var(--radius-xl);
 
@@ -403,7 +401,6 @@ Beispiele:
     display: flex;
     flex-direction: column;
     position: relative;
-    backdrop-filter: blur(5px);
     cursor: pointer;
     border: var(--glass-border);
     border-radius: var(--radius-xl);
@@ -514,7 +511,6 @@ Beispiele:
   .shift-info-area {
     display: flex;
     flex-direction: column;
-    backdrop-filter: blur(10px);
     margin-top: 2px;
     box-shadow: inset 0 1px 0 var(--color-glass-border);
     border: var(--glass-border);
@@ -544,7 +540,6 @@ Beispiele:
 
   .shift-info-textarea {
     flex: 1;
-    backdrop-filter: blur(5px);
     border: 1px solid var(--color-glass-border);
     border-radius: var(--radius-xl);
 

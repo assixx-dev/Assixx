@@ -31,7 +31,16 @@ import {
   Sse,
   UseGuards,
 } from '@nestjs/common';
-import { Observable, Subject, type Subscriber, interval, map, merge, takeUntil } from 'rxjs';
+import {
+  Observable,
+  Subject,
+  type Subscriber,
+  finalize,
+  interval,
+  map,
+  merge,
+  takeUntil,
+} from 'rxjs';
 
 import { eventBus } from '../../utils/event-bus.js';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
@@ -940,7 +949,14 @@ export class NotificationsController {
       return undefined;
     });
 
-    // Merge streams
+    // Merge streams. The finalize() wrap is critical: NestJS unsubscribes
+    // the merged Observable on client disconnect, which fires this teardown.
+    // We then complete `destroy$` ourselves — that propagates to the
+    // takeUntil(destroy$) pipes AND triggers the auxiliary subscription's
+    // `complete` callback (line ~937), which is the only place
+    // `cleanupSSEHandlers(handlers)` runs. Without finalize+complete, every
+    // SSE disconnect would leak ~23 EventBus listeners (regression-tested in
+    // backend/test/notifications.sse.api.test.ts, 2026-05-05).
     type SSESubscriber = Subscriber<{ data: SSEMessageData }>;
     return merge(
       new Observable<{ data: SSEMessageData }>((subscriber: SSESubscriber) => {
@@ -949,6 +965,11 @@ export class NotificationsController {
       }),
       heartbeat$,
       eventSubject.pipe(takeUntil(destroy$)),
+    ).pipe(
+      finalize(() => {
+        destroy$.next();
+        destroy$.complete();
+      }),
     );
   }
 

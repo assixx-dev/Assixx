@@ -7,14 +7,21 @@
  *
  * This enables SSR pages to access the auth token via cookies.
  */
-import { fail, redirect, type ActionFailure, type Cookies } from '@sveltejs/kit';
+import { fail, redirect, type ActionFailure, type Cookies, type RequestEvent } from '@sveltejs/kit';
 
 import { setAuthCookies, clearAuthCookies } from '$lib/server/auth-cookies';
 // ADR-050 §"OAuth: Centralized Callback, Post-Callback Handoff" — shared
 // helper, also used by `_lib/2fa-server-helpers.ts::handleVerifyAction`
 // (the post-ADR-054 mandatory-2FA path that now needs the same cross-
 // origin redirect this file's OAuth-bypass-login branch needed first).
-import { buildSubdomainHandoffUrl } from '$lib/server/handoff-url';
+import { buildSubdomainHandoffUrl, buildSubdomainLoginUrl } from '$lib/server/handoff-url';
+// ADR-050 followup 2026-05-05: apex remember-last-tenant cookie. Pure UX
+// hint, NOT an auth credential — see helper file header for threat model.
+import {
+  clearLastTenantSlug,
+  getLastTenantSlug,
+  setLastTenantSlugIfApex,
+} from '$lib/server/last-tenant-cookie';
 import { resilientFetch } from '$lib/server/resilient-fetch';
 import { verifyTurnstile } from '$lib/server/turnstile';
 import { createLogger } from '$lib/utils/logger';
@@ -140,6 +147,55 @@ function isRedirectError(err: unknown): boolean {
 }
 
 /**
+ * ADR-050 followup 2026-05-05: apex remember-last-tenant redirect helper.
+ *
+ * Extracted from `load` to keep the load function under the cyclomatic /
+ * cognitive-complexity ceilings (sonarjs/cognitive-complexity = 10,
+ * complexity = 10, Power-of-Ten Rule §10) — every skip-rule branch adds to
+ * both metrics and the inline form pushed `load` past the limit.
+ *
+ * Three exit modes:
+ *   - **clear-and-return** on `?logout=success` / `?session=forbidden` →
+ *     wipes the stale hint, falls back to the credentials form.
+ *   - **return** (no-op) when conditions disqualify the redirect: not on
+ *     apex, accessToken already present, the page is showing a recoverable
+ *     error toast (`?session=expired` / `?timeout=true`), or the hint is
+ *     missing/malformed.
+ *   - **throw `redirect()`** when the hint is valid and conditions allow —
+ *     SvelteKit treats this as a thrown sentinel; the caller's `try/catch`
+ *     re-throws via `isRedirectError` to propagate.
+ *
+ * Detailed rationale for each skip rule lives in the file header just above
+ * `load`; this helper carries the implementation only.
+ */
+function maybeRedirectToLastTenant(
+  cookies: Cookies,
+  request: Request,
+  search: URLSearchParams,
+  hostSlug: string | null,
+): void {
+  if (hostSlug !== null) return;
+  if (search.has('logout') || search.get('session') === 'forbidden') {
+    clearLastTenantSlug(cookies);
+    return;
+  }
+  if (
+    cookies.get('accessToken') !== undefined ||
+    search.get('session') === 'expired' ||
+    search.has('timeout')
+  ) {
+    return;
+  }
+  const lastSlug = getLastTenantSlug(cookies);
+  if (lastSlug === null) return;
+  // info-level so the redirect is greppable in dev/prod logs without
+  // flipping global DEBUG — this is a user-facing flow we want visible
+  // when diagnosing "why didn't tab 2 redirect?" reports.
+  log.info({ lastSlug }, 'Apex /login: hint cookie present → redirect to subdomain /login');
+  redirect(302, buildSubdomainLoginUrl(lastSlug, request));
+}
+
+/**
  * Page-stage discriminator (FEAT_2FA_EMAIL_MASTERPLAN Step 5.2 v0.8.1
  * inline-design revision). The login card swaps its body content based on
  * this value:
@@ -164,7 +220,7 @@ type LoginStage = 'credentials' | 'verify';
  * resolution) add nothing. `resilientFetch` wraps the global fetch with
  * retry-on-ECONNRESET semantics that matter much more for this auth check.
  */
-export const load: PageServerLoad = async ({ cookies }) => {
+export const load: PageServerLoad = async ({ cookies, locals, request, url }) => {
   // Fast path: pending 2FA challenge → verify stage. Checked BEFORE the
   // /users/me probe because a user mid-2FA does NOT have an accessToken yet
   // (tokens are minted only AFTER verify succeeds), so the probe would 401
@@ -174,6 +230,21 @@ export const load: PageServerLoad = async ({ cookies }) => {
   if (challengeToken !== undefined && challengeToken !== '') {
     return { stage: 'verify' satisfies LoginStage };
   }
+
+  // ADR-050 followup 2026-05-05: apex remember-last-tenant redirect.
+  //
+  // When the user lands on apex `/login` without an active session, but a
+  // previous successful login on this browser planted the `lastTenantSlug`
+  // cookie on apex, redirect them to `<slug>.<apex>/`. The subdomain's
+  // (app) layout reuses its own auth cookies; if the subdomain session is
+  // still alive → dashboard, if not → bounces back here with
+  // `?session=expired` (handled as a no-redirect skip inside the helper).
+  //
+  // Implementation extracted to `maybeRedirectToLastTenant` to keep this
+  // function under the cyclomatic / cognitive-complexity ceilings — every
+  // skip-rule branch adds to both metrics. See the helper for the full
+  // skip matrix and rationale.
+  maybeRedirectToLastTenant(cookies, request, url.searchParams, locals.hostSlug);
 
   const token = cookies.get('accessToken');
 
@@ -359,10 +430,10 @@ async function verifyTurnstileFromForm(
  */
 async function buildHandoffRedirect(
   data: LoginResponseData,
-  hostSlug: string | null,
-  fetchFn: typeof fetch,
-  request: Request,
+  event: RequestEvent,
 ): Promise<string | null> {
+  const { request, cookies, fetch: fetchFn, url, locals } = event;
+  const hostSlug = locals.hostSlug;
   const userSubdomain = data.user.subdomain;
   if (userSubdomain === null || userSubdomain === hostSlug) {
     // No subdomain configured, or user is already on the right origin.
@@ -396,6 +467,11 @@ async function buildHandoffRedirect(
     log.error({ envelope }, 'Handoff mint returned no `data` field — envelope shape drift?');
     return null;
   }
+  // ADR-050 followup 2026-05-05: plant the apex remember-last-tenant hint
+  // here (BEFORE returning the cross-origin redirect URL) — keeps the
+  // action body small enough for the 60-line ceiling. Helper gates on
+  // `hostSlug === null` so it is a no-op on foreign subdomains.
+  setLastTenantSlugIfApex(cookies, url, hostSlug, envelope.data.subdomain);
   return buildSubdomainHandoffUrl(envelope.data.subdomain, envelope.data.token, request);
 }
 
@@ -406,17 +482,17 @@ export const actions: Actions = {
   // @sveltejs/kit/src/runtime/server/page/actions.js) — Step 5.2 added
   // `verify` + `resend` named actions, so this one had to follow.
   // The companion `<form action="?/login">` is in `+page.svelte`.
-  login: async ({ request, cookies, fetch, locals, url }) => {
+  login: async (event) => {
+    const { request, cookies, fetch, url } = event;
     const formData = await request.formData();
     const email = formData.get('email');
     const password = formData.get('password');
     const turnstileToken = formData.get('turnstileToken');
 
     if (!isValidStringField(email) || !isValidStringField(password)) {
-      const emailValue = typeof email === 'string' ? email : '';
       return fail(400, {
         error: 'E-Mail und Passwort sind erforderlich',
-        email: emailValue,
+        email: typeof email === 'string' ? email : '',
       });
     }
 
@@ -453,7 +529,7 @@ export const actions: Actions = {
       // Session 12c (ADR-050): origin-aware branch. If user's tenant has a
       // subdomain AND we're NOT on it, mint a handoff token so cookies land
       // on the correct subdomain. Otherwise fall through to apex-cookie flow.
-      const handoffUrl = await buildHandoffRedirect(result.data, locals.hostSlug, fetch, request);
+      const handoffUrl = await buildHandoffRedirect(result.data, event);
       if (handoffUrl !== null) {
         // IMPORTANT: do NOT setAuthCookies() — cookies must land on the
         // subdomain origin, not apex. Subdomain page (Session 12 consumer)

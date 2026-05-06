@@ -24,7 +24,7 @@ The production Dockerfile (`docker/Dockerfile`) had a **broken RUN instruction**
 | **Broken Build**      | Production Dockerfile line 64-65 syntactically broken — `dumb-init` not installed, `addgroup` missing, `adduser` malformed | CRITICAL |
 | **BuildKit**          | Production Dockerfile missing `# syntax=docker/dockerfile:1` directive                                                     | CRITICAL |
 | **Signal Handling**   | `dumb-init` referenced in CMD but not installed (broken RUN); frontend had no signal forwarding at all                     | CRITICAL |
-| **Version Drift**     | npm `11.9.0` vs `11.8.0`, pnpm `10.30.2` vs `10.33.2` across files                                                         | HIGH     |
+| **Version Drift**     | npm `11.9.0` vs `11.8.0`, pnpm `10.30.2` vs `10.33.3` across files                                                         | HIGH     |
 | **Cache Performance** | Production Dockerfile lacked `--mount=type=cache` for pnpm store (dev + frontend had it)                                   | HIGH     |
 | **Layer Caching**     | Production Dockerfile lacked `COPY --link` for `--from=builder` copies                                                     | HIGH     |
 | **Image Bloat**       | `tsconfig.json`, `tsconfig.base.json`, source `.ts` files, entire `shared/` dir copied to production                       | HIGH     |
@@ -61,7 +61,7 @@ RUN npm install -g npm@11.9.0 pnpm@10.30.2 && \
 **After** (correct):
 
 ```dockerfile
-ARG PNPM_VERSION=10.33.2
+ARG PNPM_VERSION=10.33.3
 RUN apk add --no-cache dumb-init && \
     npm install -g npm@11.9.0 "pnpm@${PNPM_VERSION}" && \
     addgroup -g 1001 -S nodejs && \
@@ -125,9 +125,9 @@ COPY --link --from=builder --chown=1001:1001 /app/backend/dist ./backend/dist
 | Component | Before                                                    | After                        |
 | --------- | --------------------------------------------------------- | ---------------------------- |
 | npm       | `11.9.0` (prod), `11.8.0` (dev, frontend)                 | `11.9.0` everywhere          |
-| pnpm      | `10.30.2` (prod hardcoded), `10.33.2` (dev, frontend ARG) | `10.33.2` via ARG everywhere |
+| pnpm      | `10.30.2` (prod hardcoded), `10.33.3` (dev, frontend ARG) | `10.33.3` via ARG everywhere |
 
-**Rationale**: CVE-2025-64756 requires npm >= 11.1.0. Using the latest (`11.9.0`) everywhere eliminates version drift. pnpm parameterized via `ARG PNPM_VERSION` for consistency with ADR-008.
+**Rationale**: CVE-2025-64756 requires a patched npm. Using the latest pinned version everywhere eliminates version drift. pnpm parameterized via `ARG PNPM_VERSION` for consistency with ADR-008.
 
 ### 8. HEALTHCHECK Improvements
 
@@ -350,7 +350,7 @@ Additionally, the PLG observability stack had drifted behind upstream:
 
 | Line | Before                   | After                     | Reason                                   |
 | ---- | ------------------------ | ------------------------- | ---------------------------------------- |
-| 206  | `redis:8-alpine`         | `redis:8.6.2-alpine`      | Stage 0 → Stage 1                        |
+| 206  | `redis:8-alpine`         | `redis:8.6.3-alpine`      | Stage 0 → Stage 1                        |
 | 397  | `nginx:alpine`           | `nginx:1.29.8-alpine`     | Stage 0 → Stage 1                        |
 | 441  | `grafana/loki:3.6.3`     | `grafana/loki:3.7.1`      | Bump (Go/gRPC upgrade)                   |
 | 476  | `prom/prometheus:v3.9.1` | `prom/prometheus:v3.11.1` | Bump (2 minors; OTLP tracing fix)        |
@@ -399,7 +399,7 @@ doppler run -- docker-compose --profile observability --profile production up -d
 doppler run -- docker-compose --profile observability --profile production ps
 ```
 
-**Loki 3.6 → 3.7 risk:** The release notes indicate only "Go and gRPC upgrade" — no documented config schema changes. If `assixx-loki` becomes unhealthy after restart, inspect `docker logs assixx-loki --tail 50` and verify `docker/loki/loki-config.yml` against the current Loki 3.7.x reference schema.
+**Loki 3.6 → 3.7 risk:** The release notes indicate only "Go and gRPC upgrade" — no documented config schema changes. If `assixx-loki` becomes unhealthy after restart, inspect `docker logs assixx-loki --tail 50` and verify `docker/loki/loki-config.yml` against the current Loki reference schema.
 
 ### Troubleshooting: "Cannot find module" errors after stack update
 
@@ -747,7 +747,7 @@ bookworm-slim (glibc):**
 - `docker/Dockerfile.pg-partman` → stays on `postgres:18.3-alpine` (no outbound
   HTTPS, no musl-DNS exposure; base swap would require a full pg_partman image
   rebuild with large regression surface — see ADR-029)
-- `docker-compose.yml` `redis:8.6.2-alpine` (no outbound HTTPS)
+- `docker-compose.yml` `redis:8.6.3-alpine` (no outbound HTTPS)
 - `docker-compose.yml` `nginx:1.29.8-alpine` (no outbound HTTPS)
 
 Rationale for the scope line: the musl DNS failure class only triggers for

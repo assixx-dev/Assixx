@@ -1,6 +1,14 @@
 // =============================================================================
-// SURVEY-ADMIN - API FUNCTIONS
-// Based on: frontend/src/scripts/survey/admin/data.ts
+// SURVEY-ADMIN — API FUNCTIONS (Phase 4.10b cleanup)
+//
+// Phase 4.10b (2026-05-06) trimmed the legacy client-side load functions —
+// `loadSurveys`, `loadTemplates`, `loadDepartments`, `loadTeams`, `loadAreas`,
+// `createFromTemplate` were the manual-fetch counterparts of what the
+// `+page.server.ts` SSR load now does in parallel. After the URL-driven
+// rewrite, the only mutation flows that still need a client-side API call
+// are: get-by-id (for edit modal), create / update / delete / complete.
+// All other reads come from SSR data via `$derived(data.X)` and refresh via
+// `invalidateAll()`. See FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.10b.
 // =============================================================================
 
 import { getApiClient } from '$lib/utils/api-client';
@@ -9,40 +17,20 @@ import { checkSessionExpired } from '$lib/utils/session-expired.js';
 
 import { API_ENDPOINTS } from './constants';
 
-import type {
-  Survey,
-  SurveyTemplate,
-  Department,
-  Team,
-  Area,
-  SurveyFormData,
-  SurveyApiResponse,
-  PaginatedResponse,
-} from './types';
+import type { Survey, SurveyApiResponse, SurveyFormData } from './types';
 
 const log = createLogger('SurveyAdminApi');
 
 const apiClient = getApiClient();
 
 // =============================================================================
-// SURVEYS
+// SURVEYS — CRUD only (reads come from SSR via $derived)
 // =============================================================================
 
 /**
- * Load all surveys
- */
-export async function loadSurveys(): Promise<Survey[]> {
-  try {
-    return await apiClient.get<Survey[]>(API_ENDPOINTS.SURVEYS);
-  } catch (err: unknown) {
-    log.error({ err }, 'Error loading surveys');
-    checkSessionExpired(err);
-    return [];
-  }
-}
-
-/**
- * Load survey by ID
+ * Load survey by ID — used by `loadSurveyForEdit` to populate the edit
+ * modal. Cannot come from SSR data because the list rows omit nested
+ * questions / assignments / option text.
  */
 export async function loadSurveyById(surveyId: number | string): Promise<Survey | null> {
   try {
@@ -124,83 +112,5 @@ export async function deleteSurvey(
     checkSessionExpired(err);
     const message = err instanceof Error ? err.message : 'Fehler beim Löschen der Umfrage';
     return { success: false, error: message };
-  }
-}
-
-// =============================================================================
-// TEMPLATES
-// =============================================================================
-
-/**
- * Load survey templates
- */
-export async function loadTemplates(): Promise<SurveyTemplate[]> {
-  try {
-    return await apiClient.get<SurveyTemplate[]>(API_ENDPOINTS.TEMPLATES);
-  } catch (err: unknown) {
-    log.error({ err }, 'Error loading templates');
-    return [];
-  }
-}
-
-/**
- * Create survey from template
- */
-export async function createFromTemplate(
-  templateId: number,
-): Promise<{ success: boolean; survey?: Survey; error?: string }> {
-  try {
-    const survey = await apiClient.post<Survey>(API_ENDPOINTS.templateCreate(templateId), {});
-    return { success: true, survey };
-  } catch (err: unknown) {
-    log.error({ err, templateId }, 'Error creating from template');
-    checkSessionExpired(err);
-    const message = err instanceof Error ? err.message : 'Fehler beim Erstellen aus Vorlage';
-    return { success: false, error: message };
-  }
-}
-
-// =============================================================================
-// ORGANIZATION DATA
-// =============================================================================
-
-/**
- * Load departments
- */
-export async function loadDepartments(): Promise<Department[]> {
-  try {
-    const response = await apiClient.get<PaginatedResponse<Department> | Department[]>(
-      API_ENDPOINTS.DEPARTMENTS,
-    );
-    return Array.isArray(response) ? response : response.data;
-  } catch (err: unknown) {
-    log.error({ err }, 'Error loading departments');
-    return [];
-  }
-}
-
-/**
- * Load teams
- */
-export async function loadTeams(): Promise<Team[]> {
-  try {
-    const response = await apiClient.get<PaginatedResponse<Team> | Team[]>(API_ENDPOINTS.TEAMS);
-    return Array.isArray(response) ? response : response.data;
-  } catch (err: unknown) {
-    log.error({ err }, 'Error loading teams');
-    return [];
-  }
-}
-
-/**
- * Load areas
- */
-export async function loadAreas(): Promise<Area[]> {
-  try {
-    const response = await apiClient.get<PaginatedResponse<Area> | Area[]>(API_ENDPOINTS.AREAS);
-    return Array.isArray(response) ? response : response.data;
-  } catch (err: unknown) {
-    log.error({ err }, 'Error loading areas');
-    return [];
   }
 }

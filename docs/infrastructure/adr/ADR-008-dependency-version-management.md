@@ -320,7 +320,7 @@ values moved from Alpine to Debian slim for the two Node images
 (`Dockerfile.dev`, `Dockerfile`, `Dockerfile.frontend`).
 
 Non-Node images (`postgres:18.3-alpine` via `Dockerfile.pg-partman`,
-`redis:8.6.2-alpine`, `nginx:1.29.8-alpine`) stay on Alpine — they issue
+`redis:8.6.3-alpine`, `nginx:1.29.8-alpine`) stay on Alpine — they issue
 no outbound HTTPS and are not affected by the musl DNS failure class.
 
 ---

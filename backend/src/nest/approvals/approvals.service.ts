@@ -29,21 +29,41 @@ import type {
 import { mapApprovalRowToApi } from './approvals.types.js';
 import type { CreateApprovalDto } from './dto/index.js';
 
-/** Pagination parameters */
+/** Pagination + filter parameters */
 export interface ApprovalFilters {
   status?: ApprovalStatus | undefined;
   addonCode?: string | undefined;
   priority?: string | undefined;
+  /**
+   * Free-text search applied via ILIKE on `a.title OR a.description` (Phase 1.2b).
+   * Service treats `undefined` and empty string identically: no WHERE clause emitted.
+   * Backwards-compat invariant — same convention as work-orders/surveys/tpm in Stage B.
+   */
+  search?: string | undefined;
   page?: number | undefined;
   limit?: number | undefined;
 }
 
-/** Paginated response */
+/**
+ * Paginated response — ADR-007 envelope shape.
+ *
+ * WHY this shape (and not the legacy `{items,total,page,pageSize}`):
+ * The `ResponseInterceptor` (`backend/src/nest/common/interceptors/response.interceptor.ts`)
+ * detects `{items, pagination}` and lifts `pagination` into `body.meta.pagination`,
+ * leaving `body.data` as the bare items array. The frontend
+ * `apiFetchPaginated<T>` helper rejects anything else
+ * (`frontend/src/lib/server/api-fetch.ts:217 isCompletePagination`).
+ * Renamed in Phase 4.3a (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN, changelog 1.13.0)
+ * — same migration as `dummy-users` (Phase 3.1) and `users` (Phase 4.1a).
+ */
 interface PaginatedApprovals {
   items: Approval[];
-  total: number;
-  page: number;
-  pageSize: number;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 /** Base SELECT with JOINed user names (no read-tracking) */
@@ -110,6 +130,15 @@ export class ApprovalsService {
           params.push(filters.priority);
           paramIdx++;
         }
+        // Free-text search across title + description (single bound param reused).
+        // `undefined` OR empty string → no WHERE clause (backwards-compat, Phase 1.2b).
+        if (filters.search !== undefined && filters.search !== '') {
+          conditions.push(
+            `(a.title ILIKE $${String(paramIdx)} OR a.description ILIKE $${String(paramIdx)})`,
+          );
+          params.push(`%${filters.search}%`);
+          paramIdx++;
+        }
 
         const where = conditions.join(' AND ');
         const page = filters.page ?? 1;
@@ -132,11 +161,14 @@ export class ApprovalsService {
           [...params, limit, offset, userId, tenantId],
         );
 
+        // `totalPages = total === 0 ? 0 : Math.ceil(total / limit)` keeps the
+        // FE empty-state branch (`total === 0`) and the page-bounds derivation
+        // (`hasNext = page < totalPages`) coherent — same math as dummy-users
+        // (Phase 3.1) and users (Phase 4.1a).
+        const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
         return {
           items: dataResult.rows.map(mapApprovalRowToApi),
-          total,
-          page,
-          pageSize: limit,
+          pagination: { page, limit, total, totalPages },
         };
       },
     );
@@ -199,11 +231,10 @@ export class ApprovalsService {
           [...params, limit, offset, userId, tenantId],
         );
 
+        const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
         return {
           items: dataResult.rows.map(mapApprovalRowToApi),
-          total,
-          page,
-          pageSize: limit,
+          pagination: { page, limit, total, totalPages },
         };
       },
     );

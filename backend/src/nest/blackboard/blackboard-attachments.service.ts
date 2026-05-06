@@ -80,14 +80,19 @@ export class BlackboardAttachmentsService {
   ): Promise<Record<string, unknown>[]> {
     this.logger.debug(`Getting attachments for entry ${entryId}`);
 
+    // §D18 (2026-05-06): `sort` is now required on the DTO type (server-side
+    // ORDER BY dispatch), and the wrapper key was renamed to `items` so the
+    // ADR-007 envelope is emitted end-to-end. Internal cross-service callers
+    // must pass `sort` explicitly because they bypass Zod's runtime default.
     const result = await this.documentsService.listDocuments(tenantId, userId, {
       blackboardEntryId: entryId,
       isActive: 1,
       page: 1,
       limit: 100,
+      sort: 'newest',
     });
 
-    return result.documents;
+    return result.items;
   }
 
   /**

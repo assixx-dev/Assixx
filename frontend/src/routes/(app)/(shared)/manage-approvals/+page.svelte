@@ -1,25 +1,31 @@
 <script lang="ts">
   /**
-   * Manage Approvals — Eingehende Freigaben
+   * Manage Approvals — Eingehende Freigaben (Phase 4.3b URL-driven state)
    * @module shared/manage-approvals/+page
    *
-   * Level 3 SSR: Stats cards, filter bar, data table, approve/reject modals.
-   * Connected to real backend API.
+   * URL holds pagination + search + status-filter + addon-filter state per
+   * FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.3b. Mirrors the Phase-4.1b
+   * `manage-employees` template: there is NO `$state` shadow of these.
+   * Mutations call `invalidateAll()` to retrigger the load on the same URL,
+   * so `?page=N`/`?search=...`/`?status=...`/`?addonCode=...` are preserved
+   * across approve/reject.
    */
   import { onMount } from 'svelte';
 
-  import { invalidateAll } from '$app/navigation';
+  import { goto, invalidateAll } from '$app/navigation';
+  import { resolve } from '$app/paths';
 
+  import PermissionDenied from '$lib/components/PermissionDenied.svelte';
   import { notificationStore } from '$lib/stores/notification.store.svelte';
   import { showErrorAlert, showSuccessAlert } from '$lib/stores/toast';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   import ConfirmModal from '$design-system/components/confirm-modal/ConfirmModal.svelte';
 
-  import { listApprovals } from './_lib/api';
   import RootSelfTerminationCard from './RootSelfTerminationCard.svelte';
 
   import type { PageData } from './$types';
-  import type { ApprovalListItem, PaginatedApprovals } from './_lib/types';
+  import type { ApprovalListItem } from './_lib/types';
 
   // Sidebar badge clears the moment the user lands on /manage-approvals —
   // both pending self-terminations and addon approvals are visible from
@@ -29,31 +35,30 @@
     notificationStore.resetCount('approvals');
   });
 
-  // =============================================================================
-  // SSR DATA
-  // =============================================================================
+  // ============================================================================
+  // SSR DATA — URL is the single source of truth for page / search / filters.
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.3b: there is NO client `$state`
+  // shadow of these — every change goes through `goto()` → load re-run.
+  // ============================================================================
 
   const { data }: { data: PageData } = $props();
 
-  // =============================================================================
-  // CLIENT STATE
-  // =============================================================================
-
-  let statusFilter = $state('');
-  let addonFilter = $state('');
-  let submitting = $state(false);
-
-  // Server-driven pagination — Phase-2 pattern, mirrors manage-dummies.
-  // SSR loads page 1; clientApprovals overrides once the user navigates.
-  // See docs/how-to/HOW-TO-FIX-MANAGE-PAGINATION.md.
-  let currentPage = $state(1);
-  let clientApprovals = $state<PaginatedApprovals | null>(null);
-  let pageLoading = $state(false);
+  const stats = $derived(data.stats);
+  const items = $derived(data.approvals);
+  const pagination = $derived(data.pagination);
+  const rewardTiers = $derived(data.rewardTiers);
+  const searchTerm = $derived(data.search);
+  const statusFilter = $derived(data.statusFilter);
+  const addonFilter = $derived(data.addonFilter);
 
   /** Tracks UUIDs marked as read client-side — survives invalidateAll() */
   const locallyRead: Record<string, boolean> = $state({});
 
-  // Modal state
+  // ============================================================================
+  // CLIENT STATE — only modal open/close + form fields are local.
+  // ============================================================================
+
+  let submitting = $state(false);
   let showApproveModal = $state(false);
   let showRejectModal = $state(false);
   let activeApproval = $state<ApprovalListItem | null>(null);
@@ -61,19 +66,23 @@
   let approveNote = $state('');
   let selectedRewardAmount = $state<number | null>(null);
 
-  // =============================================================================
+  // Search input → URL debouncer. Local-only; URL is the authoritative state.
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const SEARCH_DEBOUNCE_MS = 300;
+
+  // ============================================================================
   // CONSTANTS
-  // =============================================================================
+  // ============================================================================
 
   const STATUS_FILTER_OPTIONS = [
-    { value: '', label: 'Alle Status' },
+    { value: 'all', label: 'Alle Status' },
     { value: 'pending', label: 'Offen' },
     { value: 'approved', label: 'Genehmigt' },
     { value: 'rejected', label: 'Abgelehnt' },
   ] as const;
 
   const ADDON_FILTER_OPTIONS = [
-    { value: '', label: 'Alle Module' },
+    { value: 'all', label: 'Alle Module' },
     { value: 'kvp', label: 'KVP' },
     { value: 'tpm', label: 'TPM / Wartung' },
     { value: 'vacation', label: 'Urlaub' },
@@ -130,32 +139,73 @@
     }
   }
 
-  // =============================================================================
-  // DERIVED
-  // =============================================================================
+  // ============================================================================
+  // URL HELPERS — single source of truth for page / search / filters
+  // ============================================================================
 
-  const stats = $derived(data.stats);
-  const approvals = $derived(clientApprovals ?? data.approvals);
-  const items = $derived(approvals.items);
-  const rewardTiers = $derived(data.rewardTiers);
-  const totalPages = $derived(
-    approvals.pageSize > 0 ? Math.max(1, Math.ceil(approvals.total / approvals.pageSize)) : 1,
-  );
+  const BASE_PATH = '/manage-approvals';
 
-  /** Client-side filtering (applies to the loaded page only — same UX as manage-dummies). */
-  const filteredItems = $derived(
-    items.filter((a: ApprovalListItem) => {
-      if (statusFilter !== '' && a.status !== statusFilter) return false;
-      if (addonFilter !== '' && a.addonCode !== addonFilter) return false;
-      return true;
-    }),
-  );
+  /**
+   * Build an href for a target page, preserving current search + filters.
+   * `buildPaginatedHref` skips defaults (page=1 / search='' / 'all'-sentinels),
+   * so canonical first-page URLs stay clean (`/manage-approvals`).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchTerm,
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        addonCode: addonFilter === 'all' ? undefined : addonFilter,
+      }),
+    );
+  }
 
-  const hasApprovals = $derived(filteredItems.length > 0);
+  /**
+   * Navigate to a new filter/search state. Page resets to 1 (default — not
+   * emitted into the URL). Status / addon defaults to current value when not
+   * explicitly overridden.
+   */
+  function navigateFilters(next: { search?: string; status?: string; addonCode?: string }): void {
+    const nextSearch = next.search ?? searchTerm;
+    const nextStatus = next.status ?? statusFilter;
+    const nextAddon = next.addonCode ?? addonFilter;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1
+        search: nextSearch,
+        status: nextStatus === 'all' ? undefined : nextStatus,
+        addonCode: nextAddon === 'all' ? undefined : nextAddon,
+      }),
+    );
+    void goto(href, { keepFocus: true });
+  }
 
-  // =============================================================================
+  function handleStatusToggle(value: string): void {
+    navigateFilters({ status: value });
+  }
+
+  function handleAddonToggle(value: string): void {
+    navigateFilters({ addonCode: value });
+  }
+
+  function handleSearchInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const term = input.value;
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      navigateFilters({ search: term });
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function clearSearch(): void {
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    navigateFilters({ search: '' });
+  }
+
+  // ============================================================================
   // HANDLERS
-  // =============================================================================
+  // ============================================================================
 
   function isUnread(approval: ApprovalListItem): boolean {
     return !approval.isRead && !locallyRead[approval.uuid];
@@ -182,25 +232,6 @@
     showRejectModal = true;
   }
 
-  /**
-   * Re-fetch the requested page from the backend. Phase-2 server-driven
-   * pattern (mirrors manage-dummies). Bounded by `totalPages`; no-op on
-   * same-page click. Toast on failure — currentPage stays put.
-   */
-  async function handlePageChange(page: number): Promise<void> {
-    if (page < 1 || page > totalPages || page === currentPage) return;
-    pageLoading = true;
-    try {
-      const result = await listApprovals(page, 20);
-      currentPage = page; // eslint-disable-line require-atomic-updates -- Svelte single-threaded
-      clientApprovals = result;
-    } catch {
-      showErrorAlert('Fehler beim Laden der Seite');
-    } finally {
-      pageLoading = false;
-    }
-  }
-
   async function handleApprove(): Promise<void> {
     if (activeApproval === null) return;
     submitting = true;
@@ -217,10 +248,11 @@
         showSuccessAlert('Freigabe genehmigt');
         showApproveModal = false;
         activeApproval = null; // eslint-disable-line require-atomic-updates -- Svelte single-threaded
-        // Drop client-side page override so SSR (page 1) becomes authoritative
-        // again — list shrinks by one row, prevents stale page 5 view.
-        clientApprovals = null;
-        currentPage = 1;
+        // Retrigger SSR load on the SAME URL — preserves ?page / ?search /
+        // ?status / ?addonCode. If the current page becomes empty after the
+        // approval, the user can navigate via the pagination links manually
+        // (server-driven hasNext/hasPrev still derive correctly from
+        // pagination.totalPages).
         await invalidateAll();
       } else {
         const body = (await res.json()) as { error?: { message?: string } };
@@ -247,8 +279,6 @@
         showRejectModal = false;
         activeApproval = null; // eslint-disable-line require-atomic-updates -- Svelte single-threaded
         rejectNote = ''; // eslint-disable-line require-atomic-updates -- Svelte single-threaded
-        clientApprovals = null;
-        currentPage = 1;
         await invalidateAll();
       } else {
         const body = (await res.json()) as { error?: { message?: string } };
@@ -266,267 +296,305 @@
   <title>Freigaben verwalten</title>
 </svelte:head>
 
-<div class="container">
-  <!--
-    Step 5.3 — Root self-termination peer-approval card.
-    Visible only to root users (data.user.role === 'root'). Renders BEFORE
-    the generic approvals list because it is the highest-stakes decision
-    type (account termination) and must catch the actor's eye first.
-    Backend SSR returned an empty array for non-root → the {#if} below
-    keeps the DOM tree small for admins/leads.
-    @see docs/FEAT_ROOT_ACCOUNT_PROTECTION_MASTERPLAN.md §5.3
-  -->
-  {#if data.user?.role === 'root'}
-    <RootSelfTerminationCard
-      requests={data.rootSelfTerminationRequests}
-      peerRoots={data.rootUsers}
-    />
-  {/if}
+{#if data.permissionDenied}
+  <PermissionDenied addonName="das Freigabe-Modul" />
+{:else}
+  <div class="container">
+    <!--
+      Step 5.3 — Root self-termination peer-approval card.
+      Visible only to root users (data.user.role === 'root'). Renders BEFORE
+      the generic approvals list because it is the highest-stakes decision
+      type (account termination) and must catch the actor's eye first.
+      Backend SSR returned an empty array for non-root → the {#if} below
+      keeps the DOM tree small for admins/leads.
+      @see docs/FEAT_ROOT_ACCOUNT_PROTECTION_MASTERPLAN.md §5.3
+    -->
+    {#if data.user?.role === 'root'}
+      <RootSelfTerminationCard
+        requests={data.rootSelfTerminationRequests}
+        peerRoots={data.rootUsers}
+      />
+    {/if}
 
-  <!-- Header -->
-  <div class="card mb-6">
-    <div class="card__header">
-      <h2 class="card__title">
-        <i class="fas fa-check-double mr-2"></i>
-        Eingehende Freigaben
-      </h2>
-      <p class="mt-2 text-(--color-text-secondary)">Freigabe-Anfragen prüfen und bearbeiten</p>
-    </div>
-  </div>
-
-  <!-- Stats Cards -->
-  <div class="stats-grid mb-6">
-    <div class="card-stat card-stat--sm card-stat--warning">
-      <div class="card-stat__icon"><i class="fas fa-clock"></i></div>
-      <span class="card-stat__value">{stats.pending}</span>
-      <span class="card-stat__label">Offen</span>
-    </div>
-    <div class="card-stat card-stat--sm card-stat--success">
-      <div class="card-stat__icon"><i class="fas fa-check"></i></div>
-      <span class="card-stat__value">{stats.approved}</span>
-      <span class="card-stat__label">Genehmigt</span>
-    </div>
-    <div class="card-stat card-stat--sm card-stat--danger">
-      <div class="card-stat__icon"><i class="fas fa-times"></i></div>
-      <span class="card-stat__value">{stats.rejected}</span>
-      <span class="card-stat__label">Abgelehnt</span>
-    </div>
-    <div class="card-stat card-stat--sm">
-      <div class="card-stat__icon"><i class="fas fa-list"></i></div>
-      <span class="card-stat__value">{stats.total}</span>
-      <span class="card-stat__label">Gesamt</span>
-    </div>
-  </div>
-
-  <!-- Filter Bar + Table -->
-  <div class="card">
-    <div class="card__header">
-      <div class="filter-bar">
-        <div class="toggle-group">
-          {#each STATUS_FILTER_OPTIONS as opt (opt.value)}
-            <button
-              type="button"
-              class="toggle-group__btn"
-              class:active={statusFilter === opt.value}
-              onclick={() => {
-                statusFilter = opt.value;
-              }}
-            >
-              {opt.label}
-            </button>
-          {/each}
-        </div>
-
-        <div class="toggle-group">
-          {#each ADDON_FILTER_OPTIONS as opt (opt.value)}
-            <button
-              type="button"
-              class="toggle-group__btn"
-              class:active={addonFilter === opt.value}
-              onclick={() => {
-                addonFilter = opt.value;
-              }}
-            >
-              {opt.label}
-            </button>
-          {/each}
-        </div>
+    <!-- Header -->
+    <div class="card mb-6">
+      <div class="card__header">
+        <h2 class="card__title">
+          <i class="fas fa-check-double mr-2"></i>
+          Eingehende Freigaben
+        </h2>
+        <p class="mt-2 text-(--color-text-secondary)">Freigabe-Anfragen prüfen und bearbeiten</p>
       </div>
     </div>
 
-    <div class="card__body">
-      {#if !hasApprovals}
-        <div class="empty-state empty-state--in-card">
-          <div class="empty-state__icon">
-            <i class="fas fa-check-double"></i>
-          </div>
-          <h3 class="empty-state__title">Keine Freigaben vorhanden</h3>
-          <p class="empty-state__description">Es liegen aktuell keine Freigabe-Anfragen vor.</p>
-        </div>
-      {:else}
-        <div class="table-responsive">
-          <table class="data-table data-table--hover">
-            <thead>
-              <tr>
-                <th scope="col">Titel</th>
-                <th scope="col">Modul</th>
-                <th scope="col">Angefragt von</th>
-                <th scope="col">Priorität</th>
-                <th scope="col">Status</th>
-                <th scope="col">Prämie</th>
-                <th scope="col">Datum</th>
-                <th scope="col">Aktionen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each filteredItems as approval (approval.uuid)}
-                {@const statusBadge = STATUS_BADGE[approval.status] ?? STATUS_BADGE.pending}
-                {@const addonBadge = ADDON_BADGE[approval.addonCode]}
-                {@const priorityCss = PRIORITY_BADGE[approval.priority] ?? 'badge--outline'}
-                {@const priorityLabel = PRIORITY_LABEL[approval.priority] ?? approval.priority}
-                {@const sourceUrl = resolveSourceUrl(approval.addonCode, approval.sourceUuid)}
-                <tr
-                  onclick={() => {
-                    markAsRead(approval);
-                  }}
-                >
-                  <td
-                    class="td--title"
-                    title={approval.title}
-                  >
-                    {#if sourceUrl !== null}
-                      <a
-                        href={sourceUrl}
-                        class="source-link">{approval.title}</a
-                      >
-                    {:else}
-                      {approval.title}
-                    {/if}
-                    {#if isUnread(approval)}
-                      <span class="badge badge--sm badge--success ml-2">Neu</span>
-                    {/if}
-                    {#if approval.description}
-                      <span class="td--description">{approval.description}</span>
-                    {/if}
-                  </td>
-                  <td>
-                    {#if addonBadge}
-                      <span class="badge {addonBadge.cssClass}">{addonBadge.label}</span>
-                    {:else}
-                      <span class="badge badge--outline">{approval.addonCode}</span>
-                    {/if}
-                  </td>
-                  <td>{approval.requestedByName}</td>
-                  <td>
-                    <span class="badge {priorityCss}">{priorityLabel}</span>
-                  </td>
-                  <td>
-                    <span class="badge {statusBadge.cssClass}">
-                      <i class="fas {statusBadge.icon}"></i>
-                      {statusBadge.label}
-                    </span>
-                  </td>
-                  <td>
-                    {#if approval.rewardAmount !== null}
-                      <span class="badge badge--success">{approval.rewardAmount.toFixed(0)} €</span>
-                    {:else}
-                      <span class="text-(--color-text-secondary)">—</span>
-                    {/if}
-                  </td>
-                  <td>{new Date(approval.createdAt).toLocaleDateString('de-DE')}</td>
-                  <td>
-                    <div class="action-icons">
-                      {#if approval.status === 'pending'}
-                        <button
-                          type="button"
-                          class="action-icon action-icon--success"
-                          title="Genehmigen"
-                          onclick={() => {
-                            openApproveModal(approval);
-                          }}
-                        >
-                          <i class="fas fa-check"></i>
-                        </button>
-                        <button
-                          type="button"
-                          class="action-icon action-icon--danger"
-                          title="Ablehnen"
-                          onclick={() => {
-                            openRejectModal(approval);
-                          }}
-                        >
-                          <i class="fas fa-times"></i>
-                        </button>
-                      {:else if approval.decisionNote !== null}
-                        <span
-                          class="decision-note-icon"
-                          title={approval.decisionNote}
-                        >
-                          <i class="fas fa-comment"></i>
-                        </span>
-                      {/if}
-                    </div>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+    <!-- Stats Cards -->
+    <div class="stats-grid mb-6">
+      <div class="card-stat card-stat--sm card-stat--warning">
+        <div class="card-stat__icon"><i class="fas fa-clock"></i></div>
+        <span class="card-stat__value">{stats.pending}</span>
+        <span class="card-stat__label">Offen</span>
+      </div>
+      <div class="card-stat card-stat--sm card-stat--success">
+        <div class="card-stat__icon"><i class="fas fa-check"></i></div>
+        <span class="card-stat__value">{stats.approved}</span>
+        <span class="card-stat__label">Genehmigt</span>
+      </div>
+      <div class="card-stat card-stat--sm card-stat--danger">
+        <div class="card-stat__icon"><i class="fas fa-times"></i></div>
+        <span class="card-stat__value">{stats.rejected}</span>
+        <span class="card-stat__label">Abgelehnt</span>
+      </div>
+      <div class="card-stat card-stat--sm">
+        <div class="card-stat__icon"><i class="fas fa-list"></i></div>
+        <span class="card-stat__value">{stats.total}</span>
+        <span class="card-stat__label">Gesamt</span>
+      </div>
+    </div>
 
-        <!--
-          Pagination — Phase-2 server-driven pattern (mirrors manage-dummies).
-          Backend `/approvals` returns `{ items, total, page, pageSize }`; the
-          handler re-fetches the requested page client-side. Closes the silent
-          truncation bug from HOW-TO-FIX-MANAGE-PAGINATION.md.
-        -->
-        {#if totalPages > 1}
-          <nav
-            class="pagination mt-6"
-            aria-label="Seitennavigation"
-          >
+    <!-- Filter Bar + Table -->
+    <div class="card">
+      <div class="card__header">
+        <div class="filter-bar">
+          <div class="search-input">
+            <i class="fas fa-search search-input__icon"></i>
+            <input
+              type="search"
+              class="search-input__field"
+              placeholder="Suche nach Titel oder Beschreibung…"
+              value={searchTerm}
+              oninput={handleSearchInput}
+            />
             <button
               type="button"
-              class="pagination__btn pagination__btn--prev"
-              disabled={currentPage <= 1 || pageLoading}
-              onclick={() => {
-                void handlePageChange(currentPage - 1);
-              }}
+              class="search-input__clear"
+              class:search-input__clear--visible={searchTerm.length > 0}
+              onclick={clearSearch}
+              aria-label="Suche zurücksetzen"
             >
-              <i class="fas fa-chevron-left"></i>
-              Zurück
+              <i class="fas fa-times"></i>
             </button>
-            <div class="pagination__pages">
-              {#each Array.from({ length: totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
-                <button
-                  type="button"
-                  class="pagination__page"
-                  class:pagination__page--active={page === currentPage}
-                  disabled={pageLoading}
-                  onclick={() => {
-                    void handlePageChange(page);
-                  }}
-                >
-                  {page}
-                </button>
-              {/each}
+          </div>
+
+          <div class="toggle-group">
+            {#each STATUS_FILTER_OPTIONS as opt (opt.value)}
+              <button
+                type="button"
+                class="toggle-group__btn"
+                class:active={statusFilter === opt.value}
+                onclick={() => {
+                  handleStatusToggle(opt.value);
+                }}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
+
+          <div class="toggle-group">
+            {#each ADDON_FILTER_OPTIONS as opt (opt.value)}
+              <button
+                type="button"
+                class="toggle-group__btn"
+                class:active={addonFilter === opt.value}
+                onclick={() => {
+                  handleAddonToggle(opt.value);
+                }}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+
+      <div class="card__body">
+        {#if items.length === 0}
+          <div class="empty-state empty-state--in-card">
+            <div class="empty-state__icon">
+              <i class="fas fa-check-double"></i>
             </div>
-            <button
-              type="button"
-              class="pagination__btn pagination__btn--next"
-              disabled={currentPage >= totalPages || pageLoading}
-              onclick={() => {
-                void handlePageChange(currentPage + 1);
-              }}
+            <h3 class="empty-state__title">Keine Freigaben vorhanden</h3>
+            <p class="empty-state__description">Es liegen aktuell keine Freigabe-Anfragen vor.</p>
+          </div>
+        {:else}
+          <div class="table-responsive">
+            <table class="data-table data-table--hover data-table--actions-hover">
+              <thead>
+                <tr>
+                  <th scope="col">Titel</th>
+                  <th scope="col">Modul</th>
+                  <th scope="col">Angefragt von</th>
+                  <th scope="col">Priorität</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Prämie</th>
+                  <th scope="col">Datum</th>
+                  <th scope="col">Aktionen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each items as approval (approval.uuid)}
+                  {@const statusBadge = STATUS_BADGE[approval.status] ?? STATUS_BADGE.pending}
+                  {@const addonBadge = ADDON_BADGE[approval.addonCode]}
+                  {@const priorityCss = PRIORITY_BADGE[approval.priority] ?? 'badge--outline'}
+                  {@const priorityLabel = PRIORITY_LABEL[approval.priority] ?? approval.priority}
+                  {@const sourceUrl = resolveSourceUrl(approval.addonCode, approval.sourceUuid)}
+                  <tr
+                    onclick={() => {
+                      markAsRead(approval);
+                    }}
+                  >
+                    <td
+                      class="td--title"
+                      title={approval.title}
+                    >
+                      {#if sourceUrl !== null}
+                        <a
+                          href={sourceUrl}
+                          class="source-link">{approval.title}</a
+                        >
+                      {:else}
+                        {approval.title}
+                      {/if}
+                      {#if isUnread(approval)}
+                        <span class="badge badge--sm badge--success ml-2">Neu</span>
+                      {/if}
+                      {#if approval.description}
+                        <span class="td--description">{approval.description}</span>
+                      {/if}
+                    </td>
+                    <td>
+                      {#if addonBadge}
+                        <span class="badge {addonBadge.cssClass}">{addonBadge.label}</span>
+                      {:else}
+                        <span class="badge badge--outline">{approval.addonCode}</span>
+                      {/if}
+                    </td>
+                    <td>{approval.requestedByName}</td>
+                    <td>
+                      <span class="badge {priorityCss}">{priorityLabel}</span>
+                    </td>
+                    <td>
+                      <span class="badge {statusBadge.cssClass}">
+                        <i class="fas {statusBadge.icon}"></i>
+                        {statusBadge.label}
+                      </span>
+                    </td>
+                    <td>
+                      {#if approval.rewardAmount !== null}
+                        <span class="badge badge--success"
+                          >{approval.rewardAmount.toFixed(0)} €</span
+                        >
+                      {:else}
+                        <span class="text-(--color-text-secondary)">—</span>
+                      {/if}
+                    </td>
+                    <td>{new Date(approval.createdAt).toLocaleDateString('de-DE')}</td>
+                    <td>
+                      <div class="action-icons">
+                        {#if approval.status === 'pending'}
+                          <button
+                            type="button"
+                            class="action-icon action-icon--success"
+                            title="Genehmigen"
+                            onclick={() => {
+                              openApproveModal(approval);
+                            }}
+                          >
+                            <i class="fas fa-check"></i>
+                          </button>
+                          <button
+                            type="button"
+                            class="action-icon action-icon--danger"
+                            title="Ablehnen"
+                            onclick={() => {
+                              openRejectModal(approval);
+                            }}
+                          >
+                            <i class="fas fa-times"></i>
+                          </button>
+                        {:else if approval.decisionNote !== null}
+                          <span
+                            class="decision-note-icon"
+                            title={approval.decisionNote}
+                          >
+                            <i class="fas fa-comment"></i>
+                          </span>
+                        {/if}
+                      </div>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+
+          <!--
+            Pagination — Phase-4.3b URL-driven anchors. `pageHref` preserves
+            search + filters; canonical first-page URL renders without query
+            params. `hasNext` / `hasPrev` come from the backend envelope via
+            `apiFetchPaginatedWithPermission` (FEAT_SERVER_DRIVEN_PAGINATION
+            §2.1).
+          -->
+          {#if pagination.totalPages > 1}
+            <nav
+              class="pagination mt-6"
+              aria-label="Seitennavigation"
             >
-              Weiter
-              <i class="fas fa-chevron-right"></i>
-            </button>
-          </nav>
+              {#if pagination.hasPrev}
+                <a
+                  class="pagination__btn pagination__btn--prev"
+                  href={pageHref(pagination.page - 1)}
+                  data-sveltekit-keepfocus
+                >
+                  <i class="fas fa-chevron-left"></i>
+                  Zurück
+                </a>
+              {:else}
+                <span class="pagination__btn pagination__btn--prev pagination__btn--disabled">
+                  <i class="fas fa-chevron-left"></i>
+                  Zurück
+                </span>
+              {/if}
+              <div class="pagination__pages">
+                {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as p (p)}
+                  {#if p === pagination.page}
+                    <span class="pagination__page pagination__page--active">{p}</span>
+                  {:else}
+                    <a
+                      class="pagination__page"
+                      href={pageHref(p)}
+                      data-sveltekit-keepfocus
+                    >
+                      {p}
+                    </a>
+                  {/if}
+                {/each}
+              </div>
+              {#if pagination.hasNext}
+                <a
+                  class="pagination__btn pagination__btn--next"
+                  href={pageHref(pagination.page + 1)}
+                  data-sveltekit-keepfocus
+                >
+                  Weiter
+                  <i class="fas fa-chevron-right"></i>
+                </a>
+              {:else}
+                <span class="pagination__btn pagination__btn--next pagination__btn--disabled">
+                  Weiter
+                  <i class="fas fa-chevron-right"></i>
+                </span>
+              {/if}
+            </nav>
+            <p class="pagination__summary">
+              Seite {pagination.page} von {pagination.totalPages} ({pagination.total} Einträge)
+            </p>
+          {/if}
         {/if}
-      {/if}
+      </div>
     </div>
   </div>
-</div>
+{/if}
 
 <!-- Approve Modal -->
 <ConfirmModal
@@ -663,6 +731,14 @@
     display: flex;
     gap: var(--spacing-4);
     flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .pagination__summary {
+    margin-top: var(--spacing-2);
+    text-align: center;
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
   }
 
   tr {

@@ -6,7 +6,14 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { API_BASE, apiFetch, apiFetchWithPermission, extractResponseData } from './api-fetch';
+import {
+  API_BASE,
+  apiFetch,
+  apiFetchPaginated,
+  apiFetchPaginatedWithPermission,
+  apiFetchWithPermission,
+  extractResponseData,
+} from './api-fetch';
 
 // ─── extractResponseData ────────────────────────────────────────────────────
 
@@ -290,5 +297,591 @@ describe('apiFetchWithPermission – error handling', () => {
     const result = await apiFetchWithPermission('/bad-json', TOKEN, mockFetch as typeof fetch);
 
     expect(result).toEqual({ data: null, permissionDenied: false });
+  });
+});
+
+// ─── apiFetchPaginated ──────────────────────────────────────────────────────
+
+/** Canonical ADR-007 paginated envelope used by most success-path tests. */
+const PAGINATED_BODY = {
+  success: true,
+  data: [{ id: 1 }, { id: 2 }],
+  meta: {
+    pagination: { page: 2, limit: 25, total: 100, totalPages: 4 },
+  },
+  timestamp: '2026-05-02T00:00:00.000Z',
+};
+
+/**
+ * Shape returned by every error path in `apiFetchPaginated`. Matches
+ * `EMPTY_PAGINATION` in api-fetch.ts (page=1, limit=10, total/totalPages=0,
+ * hasNext/hasPrev=false). Centralised here so a refactor of the empty
+ * defaults is caught by every error-path test at once.
+ */
+const EMPTY_RESULT = {
+  data: [],
+  pagination: {
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0,
+    hasNext: false,
+    hasPrev: false,
+  },
+};
+
+describe('apiFetchPaginated – request construction', () => {
+  it('should call fetch with correct URL and headers', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(PAGINATED_BODY));
+
+    await apiFetchPaginated('/users?page=2', TOKEN, mockFetch as typeof fetch);
+
+    expect(mockFetch).toHaveBeenCalledWith(`${API_BASE}/users?page=2`, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  });
+});
+
+describe('apiFetchPaginated – success responses', () => {
+  it('should preserve all meta.pagination fields and derive hasNext/hasPrev (mid page)', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(PAGINATED_BODY));
+
+    const result = await apiFetchPaginated<{ id: number }>(
+      '/users?page=2&limit=25',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual({
+      data: [{ id: 1 }, { id: 2 }],
+      pagination: {
+        page: 2,
+        limit: 25,
+        total: 100,
+        totalPages: 4,
+        hasNext: true,
+        hasPrev: true,
+      },
+    });
+  });
+});
+
+describe('apiFetchPaginated – hasNext/hasPrev derivation', () => {
+  it('should set hasPrev=false on first page', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: 1, limit: 25, total: 100, totalPages: 4 } },
+      }),
+    );
+
+    const result = await apiFetchPaginated<{ id: number }>(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.pagination.hasPrev).toBe(false);
+    expect(result.pagination.hasNext).toBe(true);
+  });
+
+  it('should set hasNext=false on last page', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 100 }],
+        meta: { pagination: { page: 4, limit: 25, total: 100, totalPages: 4 } },
+      }),
+    );
+
+    const result = await apiFetchPaginated<{ id: number }>(
+      '/users?page=4',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.pagination.hasNext).toBe(false);
+    expect(result.pagination.hasPrev).toBe(true);
+  });
+
+  it('should set both hasNext and hasPrev to false when only one page exists', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: 1, limit: 25, total: 5, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginated<{ id: number }>(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.pagination.hasNext).toBe(false);
+    expect(result.pagination.hasPrev).toBe(false);
+  });
+});
+
+describe('apiFetchPaginated – empty result envelope', () => {
+  it('should handle empty result envelope (total=0, totalPages=0)', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [],
+        meta: { pagination: { page: 1, limit: 25, total: 0, totalPages: 0 } },
+      }),
+    );
+
+    const result = await apiFetchPaginated<{ id: number }>(
+      '/users?search=nomatch',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.data).toEqual([]);
+    expect(result.pagination).toEqual({
+      page: 1,
+      limit: 25,
+      total: 0,
+      totalPages: 0,
+      hasNext: false,
+      hasPrev: false,
+    });
+  });
+});
+
+describe('apiFetchPaginated – HTTP error responses', () => {
+  it('should return empty result on 400', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 400));
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  it('should return empty result on 401', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 401));
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  // 403 is the apiFetchWithPermission detection case — paginated callers that
+  // need permission-aware UI compose apiFetchPaginated with apiFetchWithPermission
+  // (or a future apiFetchPaginatedWithPermission). The paginated helper itself
+  // returns the same empty-result structure regardless of which 4xx fired.
+  it('should return empty result on 403 (apiFetchWithPermission compatibility)', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 403));
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  it('should return empty result on 500', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 500));
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+});
+
+describe('apiFetchPaginated – network/parse errors', () => {
+  it('should return empty result on network error', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  it('should return empty result on JSON parse error', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError('Unexpected token')),
+    });
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+});
+
+describe('apiFetchPaginated – malformed envelope: structural', () => {
+  it('should return empty result when meta is missing entirely', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ success: true, data: [{ id: 1 }] }));
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  it('should return empty result when meta.pagination is missing', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ success: true, data: [{ id: 1 }], meta: { timestamp: 'x' } }),
+    );
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  it('should return empty result when data is not an array', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: { id: 1 },
+        meta: { pagination: { page: 1, limit: 10, total: 1, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  it('should return empty result when data is undefined', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        meta: { pagination: { page: 1, limit: 10, total: 1, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+});
+
+describe('apiFetchPaginated – malformed envelope: field-level', () => {
+  it('should return empty result when a pagination field has the wrong type', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: '1', limit: 10, total: 1, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  it('should return empty result when a pagination field is missing', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: 1, limit: 10, total: 1 } }, // totalPages omitted
+      }),
+    );
+
+    const result = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+
+  // Pre-Phase-3 dummy-users ships `{items, total, pageSize}` (masterplan §0.1).
+  // This is the exact shape Phase 3.1 will fix; until then, our type-guards
+  // must reject it cleanly with an empty result + warn log.
+  it('should return empty result for pre-Phase-3 dummy-users shape', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ items: [{ id: 1 }], total: 50, pageSize: 20 }));
+
+    const result = await apiFetchPaginated('/dummy-users', TOKEN, mockFetch as typeof fetch);
+
+    expect(result).toEqual(EMPTY_RESULT);
+  });
+});
+
+describe('apiFetchPaginated – invariants', () => {
+  // Catches accidental refactor of `EMPTY_PAGINATION` / `emptyPaginatedResult`
+  // into a shared-reference singleton: two consumers mutating the result
+  // would corrupt each other.
+  it('should return a fresh empty result per call (no shared reference)', async () => {
+    mockFetch.mockResolvedValue(mockResponse(null, false, 500));
+
+    const a = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+    const b = await apiFetchPaginated('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(a).not.toBe(b);
+    expect(a.data).not.toBe(b.data);
+    expect(a.pagination).not.toBe(b.pagination);
+  });
+});
+
+// ─── apiFetchPaginatedWithPermission ────────────────────────────────────────
+//
+// Phase-4 Spec Deviation D6: this is the helper the original Phase-2
+// test-comment (line 475-485 above) named as the future composition point
+// for paginated callers that need permission-aware UI. Adds 403 detection
+// on top of the same envelope-validation logic as `apiFetchPaginated`.
+//
+// Empty-result shape mirrors `apiFetchPaginated` plus `permissionDenied`.
+
+const EMPTY_PERM_RESULT = {
+  data: [],
+  pagination: {
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0,
+    hasNext: false,
+    hasPrev: false,
+  },
+  permissionDenied: false,
+};
+
+describe('apiFetchPaginatedWithPermission – request construction', () => {
+  it('should call fetch with correct URL and headers', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(PAGINATED_BODY));
+
+    await apiFetchPaginatedWithPermission(
+      '/users?role=employee&page=2',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(mockFetch).toHaveBeenCalledWith(`${API_BASE}/users?role=employee&page=2`, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – 403 detection', () => {
+  it('should return permissionDenied: true on 403', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 403));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users?role=employee',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual({
+      data: [],
+      pagination: {
+        page: 1,
+        limit: 10,
+        total: 0,
+        totalPages: 0,
+        hasNext: false,
+        hasPrev: false,
+      },
+      permissionDenied: true,
+    });
+  });
+
+  it('should NOT flag permissionDenied on 401', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 401));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should NOT flag permissionDenied on 404', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 404));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users/nonexistent',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should NOT flag permissionDenied on 500', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(null, false, 500));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – success responses', () => {
+  it('should preserve data + pagination + permissionDenied:false on 2xx', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(PAGINATED_BODY));
+
+    const result = await apiFetchPaginatedWithPermission<{ id: number }>(
+      '/users?role=employee&page=2&limit=25',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual({
+      data: [{ id: 1 }, { id: 2 }],
+      pagination: {
+        page: 2,
+        limit: 25,
+        total: 100,
+        totalPages: 4,
+        hasNext: true,
+        hasPrev: true,
+      },
+      permissionDenied: false,
+    });
+  });
+
+  it('should derive hasPrev=false on first page', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: 1, limit: 25, total: 100, totalPages: 4 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission<{ id: number }>(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.pagination.hasPrev).toBe(false);
+    expect(result.pagination.hasNext).toBe(true);
+    expect(result.permissionDenied).toBe(false);
+  });
+
+  it('should handle empty result envelope (search miss, not denial)', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [],
+        meta: { pagination: { page: 1, limit: 25, total: 0, totalPages: 0 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users?search=nomatch',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.data).toEqual([]);
+    expect(result.pagination.total).toBe(0);
+    // Critical: empty data set is NOT a permission denial.
+    expect(result.permissionDenied).toBe(false);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – malformed envelope', () => {
+  it('should return empty result with permissionDenied:false when meta is missing', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ success: true, data: [{ id: 1 }] }));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should return empty result with permissionDenied:false when data is not an array', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: { id: 1 },
+        meta: { pagination: { page: 1, limit: 10, total: 1, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should return empty result with permissionDenied:false when a pagination field has wrong type', async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: [{ id: 1 }],
+        meta: { pagination: { page: '1', limit: 10, total: 1, totalPages: 1 } },
+      }),
+    );
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – network/parse errors', () => {
+  it('should return empty result with permissionDenied:false on network error', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+
+  it('should return empty result with permissionDenied:false on JSON parse error', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError('Unexpected token')),
+    });
+
+    const result = await apiFetchPaginatedWithPermission(
+      '/users',
+      TOKEN,
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(EMPTY_PERM_RESULT);
+  });
+});
+
+describe('apiFetchPaginatedWithPermission – invariants', () => {
+  // Same fresh-result invariant as apiFetchPaginated — guards against
+  // refactor-to-shared-singleton.
+  it('should return a fresh empty result per call (no shared reference)', async () => {
+    mockFetch.mockResolvedValue(mockResponse(null, false, 403));
+
+    const a = await apiFetchPaginatedWithPermission('/x', TOKEN, mockFetch as typeof fetch);
+    const b = await apiFetchPaginatedWithPermission('/x', TOKEN, mockFetch as typeof fetch);
+
+    expect(a).not.toBe(b);
+    expect(a.pagination).not.toBe(b.pagination);
+    // Both should still flag the denial — invariant is about object identity,
+    // not about value drift.
+    expect(a.permissionDenied).toBe(true);
+    expect(b.permissionDenied).toBe(true);
   });
 });

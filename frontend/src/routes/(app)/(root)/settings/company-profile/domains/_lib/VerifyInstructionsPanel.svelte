@@ -79,6 +79,19 @@
         <dt class="w-20 font-medium">Typ</dt>
         <dd class="flex-1 font-mono">TXT</dd>
       </div>
+      <!--
+        TTL: 3600 (1 h) is the industry default for verification TXT records
+        (Google/Microsoft/GitHub all recommend 3600). Hardcoded UI hint, NOT
+        part of the verification contract — the backend's DNS lookup ignores
+        the record's published TTL. Lower values (300) only help on
+        re-verification after a failed attempt; most provider UIs (Cloudflare,
+        Namecheap, IONOS) accept "Auto" with provider-specific defaults that
+        work equally well. ADR-049.
+      -->
+      <div class="flex items-center gap-3">
+        <dt class="w-20 font-medium">TTL</dt>
+        <dd class="flex-1 font-mono">3600 (1 Stunde) — oder „Auto"</dd>
+      </div>
       <div class="flex items-center gap-3">
         <dt class="w-20 font-medium">Value</dt>
         <dd

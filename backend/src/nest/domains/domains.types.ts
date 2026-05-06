@@ -7,14 +7,21 @@
  *     `20260417223358319_create-tenant-domains.ts`).
  *   - `TenantDomain` — outward-facing API response (camelCase, ISO strings).
  *
- * `TenantDomain.verificationInstructions` is populated ONLY on the immediate
- * response to `POST /domains` so the root user can copy the exact TXT host
- * and value into their DNS console. Never returned on subsequent GETs — the
- * token lives in `tenant_domains.verification_token` and is not surfaced to
- * the API consumer afterwards (§0.2.5 #10 — persistent token, no rotation).
+ * `TenantDomain.verificationInstructions` is emitted for any non-verified row
+ * (status: 'pending' | 'failed' | 'expired') on every API response — POST,
+ * GET-list, GET-one, PATCH-verify. Verified rows omit the field. Source: the
+ * persistent `tenant_domains.verification_token` column (never rotated). RBAC
+ * is the only access gate — controller-level @Roles('root') + RLS via
+ * tenantTransaction (ADR-019) restrict the response to the owning tenant.
+ *
+ * Replaces the original "one-shot at add-time" policy (masterplan §0.2.5 #10,
+ * 2026-04-19): one-shot left users without a recovery path after panel
+ * dismiss / page reload / SPA navigation, forcing a delete+re-add cycle to
+ * see the TXT again. ADR-049 (2026-05-04 amendment) makes the token
+ * persistently retrievable for any row that still needs it.
  *
  * @see docs/FEAT_TENANT_DOMAIN_VERIFICATION_MASTERPLAN.md §2.2
- * @see docs/infrastructure/adr/ADR-048-tenant-domain-verification.md (pending Phase 6)
+ * @see docs/infrastructure/adr/ADR-049-tenant-domain-verification.md
  */
 
 export type TenantDomainStatus = 'pending' | 'verified' | 'failed' | 'expired';

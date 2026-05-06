@@ -18,11 +18,21 @@ import type { DbSurvey } from './surveys.types.js';
 
 function createServiceWithMock(deputyScope: boolean = true): {
   service: SurveyAccessService;
-  mockDb: { query: ReturnType<typeof vi.fn>; tenantQuery: ReturnType<typeof vi.fn> };
+  mockDb: {
+    query: ReturnType<typeof vi.fn>;
+    tenantQuery: ReturnType<typeof vi.fn>;
+    tenantQueryOne: ReturnType<typeof vi.fn>;
+  };
   mockOrgSettings: { getDeputyHasLeadScope: ReturnType<typeof vi.fn> };
 } {
   const qf = vi.fn();
-  const mockDb = { query: qf, tenantQuery: qf };
+  // Phase 4.10a (2026-05-06): tenantQueryOne added for the count helpers
+  // (countSurveysByAccessLevel + 3 private count methods). Distinct mock fn
+  // because count tests assert single-row { count } shape, not the multi-row
+  // arrays the fetch tests use — sharing one fn across both would force every
+  // count test to re-stub the multi-row default.
+  const qoneFn = vi.fn();
+  const mockDb = { query: qf, tenantQuery: qf, tenantQueryOne: qoneFn };
   // ADR-039: deputy scope toggle — default true preserves legacy behavior for existing tests
   const mockOrgSettings = {
     getDeputyHasLeadScope: vi.fn().mockResolvedValue(deputyScope),
@@ -159,7 +169,11 @@ describe('SECURITY: SurveyAccessService – pure clause builders', () => {
 
 describe('SECURITY: SurveyAccessService – DB-mocked methods', () => {
   let service: SurveyAccessService;
-  let mockDb: { query: ReturnType<typeof vi.fn> };
+  let mockDb: {
+    query: ReturnType<typeof vi.fn>;
+    tenantQuery: ReturnType<typeof vi.fn>;
+    tenantQueryOne: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     const result = createServiceWithMock();
@@ -480,6 +494,154 @@ describe('SECURITY: SurveyAccessService – DB-mocked methods', () => {
       const params = mockDb.query.mock.calls[0]?.[1] as unknown[];
       // [tenantId, userId, status, limit, offset]
       expect(params).toEqual([tenantId, userId, 'active', 10, 20]);
+    });
+  });
+
+  // ============================================================
+  // countSurveysByAccessLevel — Phase 4.10a (2026-05-06) §D15 rebuild
+  // ============================================================
+  // Mirrors fetchSurveysByAccessLevel structure: orchestrator dispatches
+  // to one of three private count helpers based on (hasUnrestrictedAccess,
+  // isManageMode). Each helper shares its WHERE clause with the matching
+  // fetch helper — these tests pin parameter ordering + status/search
+  // threading to prevent silent drift between fetch and count clauses
+  // (which would yield wrong totalPages).
+  // ============================================================
+
+  describe('countSurveysByAccessLevel', () => {
+    const tenantId = 1;
+    const userId = 5;
+
+    it('routes to unrestricted count when hasUnrestrictedAccess is true', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 7 });
+
+      const result = await service.countSurveysByAccessLevel(
+        tenantId,
+        userId,
+        undefined,
+        true, // hasUnrestrictedAccess
+        false,
+      );
+
+      expect(result).toBe(7);
+      const sql = mockDb.tenantQueryOne.mock.calls[0]?.[0] as string;
+      expect(sql).toContain('COUNT(*)::integer AS count');
+      // Unrestricted clause: tenant filter only, no visibility/management EXISTS
+      expect(sql).toContain('s.tenant_id = $1');
+      expect(sql).not.toContain('all_users');
+      expect(sql).not.toContain('s.created_by');
+    });
+
+    it('routes to manageable count when isManageMode is true', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 3 });
+
+      const result = await service.countSurveysByAccessLevel(
+        tenantId,
+        userId,
+        undefined,
+        false,
+        true, // isManageMode
+      );
+
+      expect(result).toBe(3);
+      const sql = mockDb.tenantQueryOne.mock.calls[0]?.[0] as string;
+      // Management clause = creator OR org-unit lead (no all_users branch)
+      expect(sql).toContain('s.created_by');
+      expect(sql).not.toContain("sa.assignment_type = 'all_users'");
+    });
+
+    it('routes to visibility count when not unrestricted and not manage mode', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 12 });
+
+      const result = await service.countSurveysByAccessLevel(
+        tenantId,
+        userId,
+        undefined,
+        false,
+        false,
+      );
+
+      expect(result).toBe(12);
+      const sql = mockDb.tenantQueryOne.mock.calls[0]?.[0] as string;
+      // Visibility clause = creator OR all_users assignment OR org-unit (full)
+      expect(sql).toContain('s.created_by');
+      expect(sql).toContain('all_users');
+    });
+
+    it('returns 0 when tenantQueryOne resolves null (defensive default)', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce(null);
+
+      const result = await service.countSurveysByAccessLevel(
+        tenantId,
+        userId,
+        undefined,
+        true,
+        false,
+      );
+
+      expect(result).toBe(0);
+    });
+
+    it('threads status filter through unrestricted count', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 5 });
+
+      await service.countSurveysByAccessLevel(tenantId, userId, 'active', true, false);
+
+      const sql = mockDb.tenantQueryOne.mock.calls[0]?.[0] as string;
+      expect(sql).toContain('s.status = $2');
+      const params = mockDb.tenantQueryOne.mock.calls[0]?.[1] as unknown[];
+      expect(params).toEqual([tenantId, 'active']);
+    });
+
+    it('threads search filter through unrestricted count', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 2 });
+
+      await service.countSurveysByAccessLevel(tenantId, userId, undefined, true, false, 'safety');
+
+      const sql = mockDb.tenantQueryOne.mock.calls[0]?.[0] as string;
+      // ILIKE clause references title OR description, both bound to same param idx
+      expect(sql).toContain('s.title ILIKE $2');
+      expect(sql).toContain('s.description ILIKE $2');
+      const params = mockDb.tenantQueryOne.mock.calls[0]?.[1] as unknown[];
+      expect(params).toEqual([tenantId, '%safety%']);
+    });
+
+    it('threads status + search through visibility count (param order pinned)', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 1 });
+
+      await service.countSurveysByAccessLevel(
+        tenantId,
+        userId,
+        'completed',
+        false,
+        false,
+        'training',
+      );
+
+      const params = mockDb.tenantQueryOne.mock.calls[0]?.[1] as unknown[];
+      // [tenantId, userId, status, %search%]
+      expect(params).toEqual([tenantId, userId, 'completed', '%training%']);
+    });
+
+    it('threads status + search through manageable count (param order pinned)', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 4 });
+
+      await service.countSurveysByAccessLevel(tenantId, userId, 'draft', false, true, 'audit');
+
+      const params = mockDb.tenantQueryOne.mock.calls[0]?.[1] as unknown[];
+      // [tenantId, userId, status, %search%]
+      expect(params).toEqual([tenantId, userId, 'draft', '%audit%']);
+    });
+
+    it('omits search clause when search is empty string (backwards-compat invariant)', async () => {
+      mockDb.tenantQueryOne.mockResolvedValueOnce({ count: 0 });
+
+      await service.countSurveysByAccessLevel(tenantId, userId, undefined, true, false, '');
+
+      const sql = mockDb.tenantQueryOne.mock.calls[0]?.[0] as string;
+      expect(sql).not.toContain('ILIKE');
+      const params = mockDb.tenantQueryOne.mock.calls[0]?.[1] as unknown[];
+      expect(params).toEqual([tenantId]);
     });
   });
 

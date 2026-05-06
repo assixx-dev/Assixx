@@ -49,7 +49,7 @@ describe('UpdateDocumentDto schema', () => {
 });
 
 // =============================================================
-// listDocumentsQuerySchema (via ListDocumentsQueryDto.schema)
+// ListDocumentsQuerySchema (via ListDocumentsQueryDto.schema)
 // =============================================================
 
 describe('ListDocumentsQueryDto schema', () => {
@@ -92,5 +92,22 @@ describe('ListDocumentsQueryDto schema', () => {
 
   it('should reject limit > 100', () => {
     expect(listSchema.safeParse({ limit: '101' }).success).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // sort field — Phase 4.9a / §D18
+  // ---------------------------------------------------------------------------
+
+  it('should default sort to "newest" when omitted', () => {
+    const data = listSchema.parse({});
+    expect(data.sort).toBe('newest');
+  });
+
+  it.each(['newest', 'oldest', 'name', 'size'] as const)('should accept sort=%s', (sort) => {
+    expect(listSchema.safeParse({ sort }).success).toBe(true);
+  });
+
+  it('should reject invalid sort value', () => {
+    expect(listSchema.safeParse({ sort: 'random' }).success).toBe(false);
   });
 });

@@ -96,7 +96,6 @@
   position: relative;
   align-items: flex-start;
   gap: var(--spacing-3);
-  backdrop-filter: blur(20px);
 
   /* Clip EVERYTHING (borders + content) to rounded corners - makes progress bar smooth */
   clip-path: inset(0 round var(--radius-xl));

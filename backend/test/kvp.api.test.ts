@@ -329,28 +329,53 @@ describe('KVP: List Suggestions', () => {
     expect(body.success).toBe(true);
   });
 
-  it('should return suggestions array', async () => {
+  // Phase 4.5a (2026-05-05): /kvp now ships canonical ADR-007 envelope.
+  // Pre-4.5a the service returned `{ suggestions, pagination: { currentPage, ... } }`,
+  // which ResponseInterceptor.isPaginatedResponse could NOT detect → no
+  // `meta.pagination` was ever emitted. Now the wrapper key is `items`, so the
+  // interceptor flattens to `{ data: KVPSuggestionResponse[], meta: { pagination: { page, limit, total, totalPages } } }`.
+  // Mirrors dummy-users.api.test.ts (Phase 3.1 reference impl).
+  it('should return canonical ADR-007 envelope (data array + meta.pagination)', async () => {
     const res = await fetch(`${BASE_URL}/kvp`, {
       headers: authOnly(auth.authToken),
     });
     const body = (await res.json()) as JsonBody;
 
-    expect(Array.isArray(body.data.suggestions)).toBe(true);
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta?.pagination).toBeDefined();
+    expect(typeof body.meta.pagination.page).toBe('number');
+    expect(typeof body.meta.pagination.limit).toBe('number');
+    expect(typeof body.meta.pagination.total).toBe('number');
+    expect(typeof body.meta.pagination.totalPages).toBe('number');
 
     // Store first existing suggestion ID for fallback after delete
-    if (body.data.suggestions.length > 0) {
-      _existingKvpId = body.data.suggestions[0].id;
+    if (body.data.length > 0) {
+      _existingKvpId = body.data[0].id;
     }
   });
 
-  it('should return pagination info', async () => {
-    const res = await fetch(`${BASE_URL}/kvp`, {
+  // Plan §Step 4.5a mandate (mirrors §Step 3.1 dummy-users): verify
+  // `?page=2&limit=10` round-trips and `totalPages = ceil(total/limit)` (or 0 when total=0).
+  it('should echo ?page=2&limit=10 with correct totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?page=2&limit=10`, {
       headers: authOnly(auth.authToken),
     });
     const body = (await res.json()) as JsonBody;
 
-    expect(body.data.pagination).toBeDefined();
-    expect(typeof body.data.pagination).toBe('object');
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(10);
+    const { total, limit, totalPages } = body.meta.pagination as {
+      total: number;
+      limit: number;
+      totalPages: number;
+    };
+    const expectedTotalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    expect(totalPages).toBe(expectedTotalPages);
   });
 });
 
@@ -560,6 +585,116 @@ describe('KVP: Delete Suggestion', () => {
     if (_existingKvpId) {
       kvpId = _existingKvpId;
     }
+  });
+});
+
+// ---- seq: 10b -- Pagination (Step 5.1) --------------------------------------
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14b, 2026-05-06):
+// 4 mandated assertions per migrated endpoint (slice / cross-page search /
+// combined / RLS sanity), mirroring Session 14a (dummy-users/users/assets/approvals).
+// Search column: `s.title OR s.description` (kvp.helpers.ts:428).
+// Seeding 22 suggestions with a unique `title` tag scopes search results
+// deterministically; 22 = 2 × limit + 2 guarantees totalPages >= 3, so the
+// "matches beyond page 1" assertion is structural, not coincidental.
+// Daily-limit trigger (`trg_kvp_daily_limit`) only applies to employee role —
+// apitest user is admin/root, unlimited (per migration 009).
+// Placed BEFORE the `KVP: Participants` block so seeding runs while the kvp
+// addon is still active (Participants nests an addon-disabled subblock).
+describe('KVP: Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededIds: number[] = [];
+
+  beforeAll(async () => {
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/kvp`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          title: `${tag}_${String(i).padStart(2, '0')}`,
+          description: 'Pagination seed — deleted by afterAll',
+          categoryId: 1,
+          priority: 'normal',
+          expectedBenefit: 'Test benefit for pagination seed',
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: kvp ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededIds.push(body.data.id as number);
+    }
+  });
+
+  afterAll(async () => {
+    for (const id of seededIds) {
+      await fetch(`${BASE_URL}/kvp/${id}`, {
+        method: 'DELETE',
+        headers: authOnly(auth.authToken),
+      });
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&limit=100`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedIds = (body.data as Array<{ id: number }>).map((d) => d.id).sort((a, b) => a - b);
+    const expectedIds = [...seededIds].sort((a, b) => a - b);
+    expect(returnedIds).toEqual(expectedIds);
   });
 });
 

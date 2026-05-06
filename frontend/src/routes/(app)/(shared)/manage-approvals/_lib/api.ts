@@ -20,7 +20,7 @@
  */
 import { getApiClient } from '$lib/utils/api-client';
 
-import type { ApprovalListItem, PaginatedApprovals, RootSelfTerminationRequest } from './types';
+import type { RootSelfTerminationRequest } from './types';
 
 const apiClient = getApiClient();
 
@@ -56,33 +56,12 @@ export async function rejectPeerRequest(id: string, rejectionReason: string): Pr
 }
 
 // =============================================================================
-// Approvals list pagination — Phase-2 server-driven pattern
+// Approvals list pagination — Phase 4.3b URL-driven state
 // =============================================================================
 //
-// Mirrors `manage-dummies` (server-paginated). The backend `/approvals` route
-// already returns `{ items, total, page, pageSize }`; SSR loads page 1, the
-// client re-fetches subsequent pages on user navigation. Closes the silent
-// truncation bug documented in HOW-TO-FIX-MANAGE-PAGINATION.md.
-
-/** Defensive shape extraction — matches the manage-dummies `extractPaginated` helper. */
-function extractPaginated(result: unknown): PaginatedApprovals {
-  if (result === null || typeof result !== 'object') {
-    return { items: [], total: 0, page: 1, pageSize: 20 };
-  }
-  const obj = result as Record<string, unknown>;
-  const items = Array.isArray(obj.items) ? (obj.items as ApprovalListItem[]) : [];
-  return {
-    items,
-    total: typeof obj.total === 'number' ? obj.total : 0,
-    page: typeof obj.page === 'number' ? obj.page : 1,
-    pageSize: typeof obj.pageSize === 'number' ? obj.pageSize : 20,
-  };
-}
-
-/** Fetch one page of approvals — used by client-side page navigation. */
-export async function listApprovals(page: number, pageSize = 20): Promise<PaginatedApprovals> {
-  const result: unknown = await apiClient.get(
-    `/approvals?page=${String(page)}&limit=${String(pageSize)}`,
-  );
-  return extractPaginated(result);
-}
+// The previous client-side `listApprovals` + `extractPaginated` helpers were
+// deleted in Phase 4.3b (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN changelog
+// 1.13.0): page navigation now goes through `<a href={pageHref(...)}>` links
+// that retrigger SSR via `+page.server.ts` + `apiFetchPaginatedWithPermission`.
+// Mutations call `invalidateAll()` to refetch on the same URL. See
+// docs/how-to/HOW-TO-FIX-MANAGE-PAGINATION.md §Phase 2 canonical pattern.

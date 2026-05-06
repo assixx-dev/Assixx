@@ -7,15 +7,16 @@ import type { IsActiveStatus, FormIsActiveStatus, StatusFilter } from '@assixx/s
 export type { IsActiveStatus, FormIsActiveStatus, StatusFilter };
 
 /**
- * Hall entry in a department's effective hall list.
- * 'area'   = implicitly inherited via halls.area_id === dept.area_id
- * 'direct' = explicit cross-area assignment via department_halls junction
+ * Department's single hall (1:1 model after migration
+ * 20260505221345432_simplify-department-hall-1to1).
+ *
+ * Backend serialises this as `department.hall: { id, name, areaId } | null`.
+ * Constraint: hall.areaId must equal department.areaId (DB trigger).
  */
 export interface DepartmentHallEntry {
   id: number;
   name: string;
   areaId: number | null;
-  source: 'area' | 'direct';
 }
 
 /**
@@ -38,8 +39,14 @@ export interface Department {
   employeeNames?: string;
   teamCount?: number;
   teamNames?: string;
-  halls?: DepartmentHallEntry[];
-  hallCount?: number;
+  /**
+   * Single hall (1:1 model). `null` when no hall is assigned to this department.
+   * Replaces the previous `halls: DepartmentHallEntry[]` after migration
+   * 20260505221345432_simplify-department-hall-1to1.
+   */
+  hall?: DepartmentHallEntry | null;
+  /** Convenience field: same as hall?.id, or null. */
+  hallId?: number | null;
   assetCount?: number;
   budget?: number;
   costCenter?: string;

@@ -5,15 +5,13 @@
 import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
 import { escapeHtml } from '$lib/utils/sanitize-html';
 
-import { STATUS_BADGE_CLASSES, STATUS_LABELS, MESSAGES, FORM_DEFAULTS } from './constants';
+import { STATUS_BADGE_CLASSES, STATUS_LABELS, FORM_DEFAULTS } from './constants';
 
 import type {
   Team,
   IsActiveStatus,
   FormIsActiveStatus,
-  TeamMember,
   Asset,
-  Admin,
   Department,
   BadgeInfo,
 } from './types';
@@ -156,21 +154,6 @@ export function formatDate(dateStr: string): string {
 // DISPLAY TEXT HELPERS
 // =============================================================================
 
-/** Get selected members display text for dropdown */
-export function getMembersDisplayText(memberIds: number[], allEmployees: TeamMember[]): string {
-  if (memberIds.length === 0) return MESSAGES.NO_MEMBERS;
-
-  const names = memberIds
-    .map((id) => {
-      const emp = allEmployees.find((e) => e.id === id);
-      return emp ? `${emp.firstName} ${emp.lastName}` : '';
-    })
-    .filter(Boolean);
-
-  if (names.length <= 2) return names.join(', ');
-  return `${names.length} Mitglieder ausgewählt`;
-}
-
 /** Get selected assets display text for dropdown */
 export function getAssetsDisplayText(
   assetIds: number[],
@@ -200,13 +183,6 @@ export function getDepartmentDisplayText(
   if (departmentId === null) return fallback;
   const dept = allDepartments.find((d) => d.id === departmentId);
   return dept?.name ?? fallback;
-}
-
-/** Get leader display text */
-export function getLeaderDisplayText(leaderId: number | null, allLeaders: Admin[]): string {
-  if (leaderId === null) return MESSAGES.NO_LEADER;
-  const leader = allLeaders.find((u) => u.id === leaderId);
-  return leader ? `${leader.firstName} ${leader.lastName}` : MESSAGES.NO_LEADER;
 }
 
 // =============================================================================

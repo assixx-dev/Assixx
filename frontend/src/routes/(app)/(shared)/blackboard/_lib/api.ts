@@ -1,11 +1,15 @@
 /**
  * Blackboard API
- * All fetch functions for blackboard data
+ *
+ * Client-side fetch helpers for blackboard mutations and lookups.
+ *
+ * Listing is NOT here: `+page.server.ts` calls `apiFetchPaginatedWithPermission`
+ * directly per FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.6 (Session 8c).
+ * Pre-Phase-4.6 helpers `fetchEntries` + `buildQueryParams` were deleted as
+ * dead code (mirrors the §4.5b KVP cleanup of `fetchSuggestions`).
  */
 
 import { getApiClient } from '$lib/utils/api-client';
-
-import { ENTRIES_PER_PAGE } from './constants';
 
 import type {
   BlackboardEntry,
@@ -14,70 +18,13 @@ import type {
   Department,
   Team,
   Area,
-  FilterState,
-  PaginatedResponse,
 } from './types';
 
 const apiClient = getApiClient();
 
 // ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * Build query string from filter state
- */
-function buildQueryParams(filters: FilterState, page: number): string {
-  const params = new URLSearchParams({
-    status: filters.status,
-    page: String(page),
-    limit: String(ENTRIES_PER_PAGE),
-    sortBy: filters.sortBy,
-    sortDir: filters.sortDir,
-  });
-
-  if (filters.filter !== 'all') {
-    params.append('orgLevel', filters.filter);
-  }
-  if (filters.search.trim() !== '') {
-    params.append('search', filters.search);
-  }
-  if (filters.priority !== undefined) {
-    params.append('priority', filters.priority);
-  }
-
-  return params.toString();
-}
-
-// ============================================================================
 // Entry API Functions
 // ============================================================================
-
-/**
- * Fetch all entries with filters and pagination
- */
-export async function fetchEntries(
-  filters: FilterState,
-  page: number = 1,
-): Promise<{ entries: BlackboardEntry[]; totalPages: number; total: number }> {
-  const queryString = buildQueryParams(filters, page);
-  const data = await apiClient.get<PaginatedResponse<BlackboardEntry>>(
-    `/blackboard?${queryString}`,
-  );
-
-  // Handle different response formats
-  const entries = data.entries ?? data.data ?? [];
-  const pagination = data.meta?.pagination ?? {
-    total: entries.length,
-    totalPages: 1,
-  };
-
-  return {
-    entries,
-    totalPages: pagination.totalPages,
-    total: pagination.total,
-  };
-}
 
 /**
  * Fetch single entry by UUID

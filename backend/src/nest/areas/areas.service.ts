@@ -624,11 +624,12 @@ export class AreasService {
   /**
    * Assign halls to an area (clear-then-reassign).
    *
-   * Side effect: removes redundant department_halls entries where the newly
-   * assigned halls were directly linked to departments of this same area.
-   * Reason: once a hall belongs to an area, all departments of that area
-   * inherit it implicitly (see department_halls migration docstring), so the
-   * explicit junction row becomes noise.
+   * After migration 20260505221345432_simplify-department-hall-1to1, the
+   * department-hall relationship is a 1:1 column (departments.hall_id) and the
+   * DB trigger trg_prevent_hall_area_change_with_depts blocks halls.area_id
+   * changes while any department references the hall. The pre-step below
+   * clears departments.hall_id for halls about to leave this area, so the
+   * subsequent UPDATE on halls.area_id can proceed without trigger violation.
    */
   async assignHallsToArea(
     areaId: number,
@@ -639,23 +640,33 @@ export class AreasService {
 
     await this.getAreaById(areaId, tenantId);
 
+    // Clear departments.hall_id for halls leaving this area (trigger guard).
+    await this.db.tenantQuery(
+      `UPDATE departments SET hall_id = NULL
+       WHERE tenant_id = $1
+         AND hall_id IN (SELECT id FROM halls WHERE tenant_id = $1 AND area_id = $2)`,
+      [tenantId, areaId],
+    );
+
     await this.db.tenantQuery(
       `UPDATE halls SET area_id = NULL WHERE tenant_id = $1 AND area_id = $2`,
       [tenantId, areaId],
     );
 
     if (hallIds.length > 0) {
-      const placeholders = hallIds.map((_: number, i: number) => `$${i + 3}`).join(', ');
+      // Clear departments.hall_id for halls about to be reassigned (trigger guard).
+      // Each query uses its own $1 + $2..$N placeholders to avoid orphan params
+      // that PostgreSQL can't type-infer ("could not determine data type of $N").
+      const clearPlaceholders = hallIds.map((_: number, i: number) => `$${i + 2}`).join(', ');
       await this.db.tenantQuery(
-        `UPDATE halls SET area_id = $1 WHERE tenant_id = $2 AND id IN (${placeholders})`,
-        [areaId, tenantId, ...hallIds],
+        `UPDATE departments SET hall_id = NULL
+         WHERE tenant_id = $1 AND hall_id IN (${clearPlaceholders})`,
+        [tenantId, ...hallIds],
       );
 
+      const assignPlaceholders = hallIds.map((_: number, i: number) => `$${i + 3}`).join(', ');
       await this.db.tenantQuery(
-        `DELETE FROM department_halls
-         WHERE tenant_id = $1
-           AND hall_id IN (${placeholders})
-           AND department_id IN (SELECT id FROM departments WHERE tenant_id = $2 AND area_id = $1)`,
+        `UPDATE halls SET area_id = $1 WHERE tenant_id = $2 AND id IN (${assignPlaceholders})`,
         [areaId, tenantId, ...hallIds],
       );
     }

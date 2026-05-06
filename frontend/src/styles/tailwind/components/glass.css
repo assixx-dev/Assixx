@@ -17,7 +17,6 @@
   /* Glass Button */
   .btn-glass {
     display: inline-block;
-    backdrop-filter: blur(10px) saturate(150%);
 
     transition: all 0.3s ease;
     cursor: pointer;
@@ -44,8 +43,6 @@
 
   /* Glass Input */
   .input-glass {
-    backdrop-filter: blur(10px) saturate(150%);
-
     transition: all 0.3s ease;
     border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
@@ -83,7 +80,6 @@
     justify-content: center;
     align-items: center;
     z-index: 50;
-    backdrop-filter: blur(5px);
     inset: 0;
 
     background: oklch(0% 0 0 / 80%);
@@ -154,7 +150,6 @@
   .badge-glass {
     display: inline-flex;
     align-items: center;
-    backdrop-filter: blur(10px) saturate(150%);
     border: 1px solid var(--glass-border);
     border-radius: 9999px;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AssignHallsSchema } from './assign-halls.dto.js';
+import { SetDepartmentHallSchema } from './assign-halls.dto.js';
 import { CreateDepartmentSchema } from './create-department.dto.js';
 import { DeleteDepartmentQuerySchema } from './delete-department.dto.js';
 import { DepartmentIdParamSchema } from './department-id-param.dto.js';
@@ -8,34 +8,35 @@ import { ListDepartmentsQuerySchema } from './list-departments-query.dto.js';
 import { UpdateDepartmentSchema } from './update-department.dto.js';
 
 // =============================================================
-// AssignHallsSchema
+// SetDepartmentHallSchema (1:1 model after migration
+// 20260505221345432_simplify-department-hall-1to1)
 // =============================================================
 
-describe('AssignHallsSchema', () => {
-  it('should accept valid hall IDs array', () => {
-    const data = AssignHallsSchema.parse({ hallIds: [1, 2, 3] });
+describe('SetDepartmentHallSchema', () => {
+  it('should accept a positive hallId', () => {
+    const data = SetDepartmentHallSchema.parse({ hallId: 42 });
 
-    expect(data.hallIds).toEqual([1, 2, 3]);
+    expect(data.hallId).toBe(42);
   });
 
-  it('should accept empty array', () => {
-    const data = AssignHallsSchema.parse({ hallIds: [] });
+  it('should accept null to clear assignment', () => {
+    const data = SetDepartmentHallSchema.parse({ hallId: null });
 
-    expect(data.hallIds).toEqual([]);
+    expect(data.hallId).toBeNull();
   });
 
-  it('should coerce string IDs to numbers', () => {
-    const data = AssignHallsSchema.parse({ hallIds: ['1', '2'] });
+  it('should coerce string ID to number', () => {
+    const data = SetDepartmentHallSchema.parse({ hallId: '7' });
 
-    expect(data.hallIds).toEqual([1, 2]);
+    expect(data.hallId).toBe(7);
   });
 
-  it('should reject negative hall IDs', () => {
-    expect(AssignHallsSchema.safeParse({ hallIds: [-1] }).success).toBe(false);
+  it('should reject negative IDs', () => {
+    expect(SetDepartmentHallSchema.safeParse({ hallId: -1 }).success).toBe(false);
   });
 
-  it('should reject missing hallIds', () => {
-    expect(AssignHallsSchema.safeParse({}).success).toBe(false);
+  it('should reject missing hallId', () => {
+    expect(SetDepartmentHallSchema.safeParse({}).success).toBe(false);
   });
 });
 

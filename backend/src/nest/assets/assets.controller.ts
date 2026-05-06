@@ -53,6 +53,7 @@ import type {
   AssetUpdateRequest,
   MaintenanceHistoryResponse,
   MaintenanceRecordRequest,
+  PaginatedAssetResponse,
 } from './assets.types.js';
 import type {
   AssetAvailabilityHistoryEntry,
@@ -99,12 +100,21 @@ export class AssetsController {
     private readonly assetAvailabilityService: AssetAvailabilityService,
   ) {}
 
+  /**
+   * GET /assets — paginated list (ADR-007 envelope).
+   *
+   * Returns `{items, pagination}` from the service; ResponseInterceptor lifts
+   * `pagination` → `body.meta.pagination` and exposes `items` as `body.data`.
+   * Availability enrichment now operates on the page slice only (≤limit per
+   * request, default 20) instead of every asset in the tenant — material perf
+   * win. See masterplan §4.4a (Session 7c, 2026-05-05).
+   */
   @Get()
   async listAssets(
     @Query() query: ListAssetsQueryDto,
     @TenantId() tenantId: number,
-  ): Promise<AssetResponse[]> {
-    const assets = await this.assetsService.listAssets(tenantId, {
+  ): Promise<PaginatedAssetResponse> {
+    const result = await this.assetsService.listAssets(tenantId, query.page, query.limit, {
       ...(query.search !== undefined && { search: query.search }),
       ...(query.status !== undefined && { status: query.status }),
       ...(query.assetType !== undefined && {
@@ -121,18 +131,18 @@ export class AssetsController {
       }),
     });
 
-    // Enrich with availability data (batch query for efficiency)
-    const assetIds = assets.map((m: AssetResponse) => m.id);
+    // Enrich with availability data — batched per page slice
+    const assetIds = result.items.map((m: AssetResponse) => m.id);
     const availabilityMap = await this.assetAvailabilityService.getAssetAvailabilityBatch(
       assetIds,
       tenantId,
     );
 
-    for (const asset of assets) {
+    for (const asset of result.items) {
       this.assetAvailabilityService.addAvailabilityInfo(asset, availabilityMap.get(asset.id));
     }
 
-    return assets;
+    return result;
   }
 
   @Get('statistics')

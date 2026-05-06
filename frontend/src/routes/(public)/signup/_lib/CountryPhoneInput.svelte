@@ -149,7 +149,6 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    backdrop-filter: var(--glass-form-backdrop);
     transition: var(--form-field-transition), var(--form-field-transition-shadow);
     cursor: pointer;
     border: var(--form-field-border);

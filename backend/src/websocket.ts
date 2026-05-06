@@ -120,7 +120,12 @@ export class ChatWebSocketServer {
   // Connection Lifecycle
   // ==========================================================================
 
-  /** Forward read receipts from REST markAsRead to WebSocket senders */
+  /**
+   * Forward read receipts from REST markAsRead to WebSocket senders.
+   * Process-lifetime eventBus subscription — registered once from the
+   * ChatWebSocketServer constructor (singleton); no `.off()` needed.
+   * AUDIT_MEMORY_LEAKS.md step 4 (2026-05-05).
+   */
   private listenForReadReceipts(): void {
     eventBus.on('messages.read', (data: { readByUserId: number; entries: ReadReceiptEntry[] }) => {
       for (const entry of data.entries) {

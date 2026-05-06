@@ -1,6 +1,11 @@
 // =============================================================================
 // VACATION ENTITLEMENTS — REACTIVE STATE (Svelte 5 Runes)
-// Employee selection, balance display, entitlement form, add-days modal
+// Employee selection, balance display, entitlement form, add-days modal.
+//
+// Search + pagination are URL-driven (Phase 5.2.1, §D26) — they are NOT
+// shadowed in this state module. `+page.server.ts` is the single source of
+// truth via SvelteKit's `data` prop; `+page.svelte` reads `data.search` /
+// `data.pagination` directly and updates them via `goto()`.
 // =============================================================================
 
 import type { EmployeeListItem, VacationBalance } from './types';
@@ -16,29 +21,10 @@ let selectedYear = $state(new Date().getFullYear());
 
 let isLoading = $state(false);
 let isLoadingBalance = $state(false);
-let searchQuery = $state('');
 
 // Modals
 let showEntitlementForm = $state(false);
 let showAddDaysModal = $state(false);
-
-// ─── Derived ────────────────────────────────────────────────────────
-
-const filteredEmployees = $derived.by(() => {
-  if (searchQuery.trim() === '') return employees;
-  const q = searchQuery.trim().toLowerCase();
-  return employees.filter((emp) => {
-    const name = `${emp.firstName ?? ''} ${emp.lastName ?? ''}`.toLowerCase();
-    const empNum = emp.employeeNumber?.toLowerCase() ?? '';
-    const pos = emp.position?.toLowerCase() ?? '';
-    return (
-      name.includes(q) ||
-      emp.email.toLowerCase().includes(q) ||
-      empNum.includes(q) ||
-      pos.includes(q)
-    );
-  });
-});
 
 // ─── Methods ────────────────────────────────────────────────────────
 
@@ -77,7 +63,6 @@ function reset() {
   selectedYear = new Date().getFullYear();
   isLoading = false;
   isLoadingBalance = false;
-  searchQuery = '';
   showEntitlementForm = false;
   showAddDaysModal = false;
 }
@@ -95,9 +80,6 @@ export const entitlementsState = {
   },
   get selectedYear() {
     return selectedYear;
-  },
-  get filteredEmployees() {
-    return filteredEmployees;
   },
 
   // Data setters
@@ -119,9 +101,6 @@ export const entitlementsState = {
   get isLoadingBalance() {
     return isLoadingBalance;
   },
-  get searchQuery() {
-    return searchQuery;
-  },
   get showEntitlementForm() {
     return showEntitlementForm;
   },
@@ -135,9 +114,6 @@ export const entitlementsState = {
   },
   setLoadingBalance: (val: boolean) => {
     isLoadingBalance = val;
-  },
-  setSearchQuery: (val: string) => {
-    searchQuery = val;
   },
 
   // Employee selection

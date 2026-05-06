@@ -1,17 +1,49 @@
 <script lang="ts">
   /**
-   * Manage Admins - Page Component
-   * Level 3 SSR: $derived for SSR data, invalidateAll() after mutations.
+   * Manage Admins - Page Component (Phase 4.2 URL-driven state)
+   * @module manage-admins/+page
+   *
+   * Mirrors the Phase-3 reference impl (`manage-dummies/+page.svelte`) and
+   * the Phase-4.1b sibling (`manage-employees/+page.svelte`) per
+   * FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.2. URL holds pagination +
+   * search + status-filter state — there is NO `$state` shadow of these.
+   * Mutations call `invalidateAll()` to retrigger the load on the same URL,
+   * so `?page=N`/`?search=...`/`?isActive=N` are preserved across mutations.
+   *
+   * Root-only page (gated by `(root)/+layout.server.ts`, ADR-012). No
+   * `<PermissionDenied />` path is needed — the route group is fail-closed
+   * for non-root users.
    */
   import { goto, invalidateAll } from '$app/navigation';
+  import { resolve } from '$app/paths';
 
   import AvailabilityModal from '$lib/availability/AvailabilityModal.svelte';
   import { showSuccessAlert, showWarningAlert, showErrorAlert, showToast } from '$lib/stores/toast';
   import { getApiClient } from '$lib/utils/api-client';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
+
+  import AdminFormModal from './_lib/AdminFormModal.svelte';
+  import AdminTableRow from './_lib/AdminTableRow.svelte';
+  import { createMessages, FORM_DEFAULTS } from './_lib/constants';
+  import DeleteModals from './_lib/DeleteModals.svelte';
+  import {
+    executeFullAdminSave,
+    executeFullAvailabilitySave,
+    executeUpgradeToRoot,
+    executeDowngradeToEmployee,
+    executeDeleteAdmin,
+  } from './_lib/page-actions';
+  import RoleChangeModals from './_lib/RoleChangeModals.svelte';
+  import { populateFormFromAdmin } from './_lib/utils';
+
+  import type { PageData } from './$types';
+  import type { FormIsActiveStatus, AvailabilityStatus } from './_lib/types';
 
   const apiClient = getApiClient();
+  const log = createLogger('ManageAdminsPage');
 
+  /** Load N:M position assignments for edit mode */
   async function loadUserPositions(userId: number): Promise<void> {
     try {
       const positions = await apiClient.request<{ positionId: string }[]>(
@@ -23,43 +55,40 @@
     }
   }
 
-  import AdminFormModal from './_lib/AdminFormModal.svelte';
-  import AdminTableRow from './_lib/AdminTableRow.svelte';
-  import { createMessages, FORM_DEFAULTS } from './_lib/constants';
-  import DeleteModals from './_lib/DeleteModals.svelte';
-  import { applyAllFilters } from './_lib/filters';
-  import {
-    executeFullAdminSave,
-    executeFullAvailabilitySave,
-    executeUpgradeToRoot,
-    executeDowngradeToEmployee,
-    executeDeleteAdmin,
-  } from './_lib/page-actions';
-  import RoleChangeModals from './_lib/RoleChangeModals.svelte';
-  import SearchResults from './_lib/SearchResults.svelte';
-  import { ADMINS_PER_PAGE, getVisiblePages, populateFormFromAdmin } from './_lib/utils';
+  // ============================================================================
+  // SSR DATA — URL is the single source of truth for page / search / status.
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.2: there is NO client `$state`
+  // shadow of these — every change goes through `goto()` → load re-run.
+  // ============================================================================
 
-  import type { PageData } from './$types';
-  import type { StatusFilter, FormIsActiveStatus, AvailabilityStatus } from './_lib/types';
-
-  const log = createLogger('ManageAdminsPage');
-
-  // --- SSR DATA ---
   const { data }: { data: PageData } = $props();
+
+  // SSR data via $derived — updates when invalidateAll() / goto() reruns load.
+  // `admins` already represents the current page slice (server-paginated).
   const allAdmins = $derived(data.admins);
   const allAreas = $derived(data.areas);
   const allDepartments = $derived(data.departments);
   const positionOptions = $derived(data.positionOptions);
+  const pagination = $derived(data.pagination);
+  const searchTerm = $derived(data.search);
+  // `number | 'all'` — numeric IS_ACTIVE codes, single conversion in load.
+  const statusFilter = $derived(data.statusFilter);
+
+  // Hierarchy labels (propagated from layout)
   const labels = $derived(data.hierarchyLabels);
   const messages = $derived(createMessages(labels));
+
   const canUpgrade = $derived(data.user !== null && data.user.role === 'root');
 
-  // --- UI STATE ---
+  // ============================================================================
+  // CLIENT STATE — only modal open/close + form fields are local. Pagination,
+  // search, and status filter are URL-driven via the helpers below.
+  // ============================================================================
+
+  // Error state (legacy — load function never throws now, kept for forward-compat).
   const error = $state<string | null>(null);
-  let currentStatusFilter = $state<StatusFilter>('active');
-  let currentSearchQuery = $state('');
-  let currentPage = $state(1);
-  let searchOpen = $state(false);
+
+  // Modal States
   let showAdminModal = $state(false);
   let showDeleteModal = $state(false);
   let showUpgradeConfirmModal = $state(false);
@@ -78,6 +107,8 @@
   let availabilitySubmitting = $state(false);
   let currentEditId = $state<number | null>(null);
   let deleteAdminId = $state<number | null>(null);
+
+  // Form Fields (for AdminFormModal)
   let formFirstName = $state('');
   let formLastName = $state('');
   let formEmail = $state('');
@@ -93,48 +124,91 @@
   let formDepartmentIds = $state<number[]>([]);
   let submitting = $state(false);
 
-  // --- DERIVED ---
+  // Search input → URL debouncer. Local-only; URL is the authoritative state.
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const SEARCH_DEBOUNCE_MS = 300;
+
+  // ============================================================================
+  // DERIVED VALUES
+  // ============================================================================
+
   const isEditMode = $derived(currentEditId !== null);
   const modalTitle = $derived(isEditMode ? messages.MODAL_EDIT_TITLE : messages.MODAL_ADD_TITLE);
-  const filteredAdmins = $derived(
-    applyAllFilters(allAdmins, currentStatusFilter, currentSearchQuery),
-  );
 
-  // Pagination — slice filtered set into the current page (KISS, mirrors
-  // manage-employees). SearchResults still receives `filteredAdmins` (full
-  // set) so users can jump to a hit on any page.
-  const totalPages = $derived(Math.max(1, Math.ceil(filteredAdmins.length / ADMINS_PER_PAGE)));
-  const paginatedAdmins = $derived(
-    filteredAdmins.slice((currentPage - 1) * ADMINS_PER_PAGE, currentPage * ADMINS_PER_PAGE),
-  );
-  const visiblePages = $derived(getVisiblePages(currentPage, totalPages));
-
-  // Reset to page 1 when filter set changes — prevents user landing on
-  // an empty page after narrowing search/status. Mount-fire is a no-op.
-  $effect(() => {
-    void currentStatusFilter;
-    void currentSearchQuery;
-    currentPage = 1;
-  });
-
-  // Client-side pagination handlers (no URL update — KISS, see utils.ts)
-  function goToPage(p: number): void {
-    if (p >= 1 && p <= totalPages) currentPage = p;
-  }
-  function handlePreviousPage(): void {
-    if (currentPage > 1) currentPage -= 1;
-  }
-  function handleNextPage(): void {
-    if (currentPage < totalPages) currentPage += 1;
-  }
-
+  // Derived: Current admin for availability modal. If the user navigates pages
+  // while the modal is open, the admin may no longer be in the current page
+  // slice — `find` returns undefined → fallback to null.
   const availabilityAdmin = $derived(
     availabilityAdminId !== null ?
       (allAdmins.find((a) => a.id === availabilityAdminId) ?? null)
     : null,
   );
 
-  // --- FORM HELPERS ---
+  // ============================================================================
+  // URL HELPERS — single source of truth for page/search/status
+  // ============================================================================
+
+  const BASE_PATH = '/manage-admins';
+
+  // Default status filter — must mirror `+page.server.ts` STATUS_FILTER default
+  // (currently `'1'`, IS_ACTIVE.ACTIVE). Stripping this value from the URL
+  // keeps the canonical first-page URL clean (`/manage-admins`) per ADR-058.
+  const DEFAULT_STATUS_FILTER = 1;
+
+  /**
+   * Build an href for a target page, preserving current search + status.
+   * `buildPaginatedHref` skips defaults (page=1 / search='' / undefined),
+   * so canonical first-page URLs stay clean (`/manage-admins`).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchTerm,
+        isActive: statusFilter === DEFAULT_STATUS_FILTER ? undefined : String(statusFilter),
+      }),
+    );
+  }
+
+  /**
+   * Navigate to a new filter/search state. Page resets to 1 (default —
+   * not emitted into the URL).
+   */
+  function navigateFilters(next: { search?: string; statusFilter?: number | 'all' }): void {
+    const nextSearch = next.search ?? searchTerm;
+    const nextStatus = next.statusFilter ?? statusFilter;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1
+        search: nextSearch,
+        isActive: nextStatus === DEFAULT_STATUS_FILTER ? undefined : String(nextStatus),
+      }),
+    );
+    void goto(href, { keepFocus: true });
+  }
+
+  function handleStatusToggle(value: number | 'all'): void {
+    navigateFilters({ statusFilter: value });
+  }
+
+  function handleSearchInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const term = input.value;
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      navigateFilters({ search: term });
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function clearSearch(): void {
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    navigateFilters({ search: '' });
+  }
+
+  // ============================================================================
+  // FORM HELPERS
+  // ============================================================================
+
   function applyFormState(s: typeof FORM_DEFAULTS): void {
     formFirstName = s.firstName;
     formLastName = s.lastName;
@@ -151,7 +225,10 @@
     formDepartmentIds = [...s.departmentIds];
   }
 
-  // --- API HANDLERS ---
+  // ============================================================================
+  // API HANDLERS — Level 3: invalidateAll() after mutations
+  // ============================================================================
+
   async function saveAdmin(): Promise<void> {
     submitting = true;
     const result = await executeFullAdminSave(
@@ -182,6 +259,7 @@
     }
     if (result.success) {
       closeAdminModal();
+      // Retrigger SSR load on the SAME URL (preserves ?page / ?search / ?isActive).
       await invalidateAll();
       if (!isEditMode && result.uuid !== null) {
         showToast({
@@ -279,7 +357,10 @@
     }
   }
 
-  // --- AVAILABILITY ---
+  // ============================================================================
+  // AVAILABILITY
+  // ============================================================================
+
   function resetAvailabilityFields(): void {
     availabilityStatus = 'available';
     availabilityStart = '';
@@ -329,7 +410,10 @@
     availabilitySubmitting = false;
   }
 
-  // --- MODAL HANDLERS ---
+  // ============================================================================
+  // MODAL HANDLERS
+  // ============================================================================
+
   function openEditModal(adminId: number): void {
     const admin = allAdmins.find((a) => a.id === adminId);
     if (!admin) return;
@@ -345,21 +429,6 @@
     currentEditId = null;
     applyFormState(FORM_DEFAULTS);
   }
-
-  // --- SEARCH ---
-  $effect(() => {
-    if (searchOpen) {
-      const handleOutsideClick = (e: MouseEvent) => {
-        const target = e.target as HTMLElement;
-        const el = document.querySelector('.search-input-wrapper');
-        if (el && !el.contains(target)) searchOpen = false;
-      };
-      document.addEventListener('click', handleOutsideClick, true);
-      return () => {
-        document.removeEventListener('click', handleOutsideClick, true);
-      };
-    }
-  });
 </script>
 
 <svelte:head>
@@ -377,8 +446,10 @@
         {messages.PAGE_DESCRIPTION}
       </p>
 
-      <div class="mt-6 flex items-center justify-between gap-4">
-        <!-- Status Toggle Group -->
+      <div
+        class="mt-6 flex flex-col items-stretch gap-4 md:flex-row md:items-center md:justify-between"
+      >
+        <!-- Status Toggle Group — numeric IS_ACTIVE codes (0/1/3 + 'all') -->
         <div
           class="toggle-group"
           id="admin-status-toggle"
@@ -386,10 +457,10 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'active'}
+            class:active={statusFilter === 1}
             title="Aktive Administratoren"
             onclick={() => {
-              currentStatusFilter = 'active';
+              handleStatusToggle(1);
             }}
           >
             <i class="fas fa-user-check"></i>
@@ -398,10 +469,10 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'inactive'}
+            class:active={statusFilter === 0}
             title="Inaktive Administratoren"
             onclick={() => {
-              currentStatusFilter = 'inactive';
+              handleStatusToggle(0);
             }}
           >
             <i class="fas fa-user-times"></i>
@@ -410,10 +481,10 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'archived'}
+            class:active={statusFilter === 3}
             title="Archivierte Administratoren"
             onclick={() => {
-              currentStatusFilter = 'archived';
+              handleStatusToggle(3);
             }}
           >
             <i class="fas fa-archive"></i>
@@ -422,10 +493,10 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'all'}
+            class:active={statusFilter === 'all'}
             title="Alle Administratoren"
             onclick={() => {
-              currentStatusFilter = 'all';
+              handleStatusToggle('all');
             }}
           >
             <i class="fas fa-users"></i>
@@ -433,62 +504,33 @@
           </button>
         </div>
 
-        <!-- Search Input -->
-        <div
-          class="search-input-wrapper max-w-80"
-          class:search-input-wrapper--open={searchOpen}
-        >
-          <div
-            class="search-input"
-            id="admin-search-container"
+        <!-- Search Input — debounced URL update (300 ms), URL-driven -->
+        <div class="search-input max-w-80">
+          <i class="search-input__icon fas fa-search"></i>
+          <input
+            type="search"
+            id="admin-search"
+            class="search-input__field"
+            placeholder={messages.SEARCH_PLACEHOLDER}
+            autocomplete="off"
+            value={searchTerm}
+            oninput={handleSearchInput}
+          />
+          <button
+            class="search-input__clear"
+            class:search-input__clear--visible={searchTerm.length > 0}
+            type="button"
+            aria-label="Suche löschen"
+            onclick={clearSearch}
           >
-            <i class="search-input__icon fas fa-search"></i>
-            <input
-              type="search"
-              id="admin-search"
-              class="search-input__field"
-              placeholder={messages.SEARCH_PLACEHOLDER}
-              autocomplete="off"
-              value={currentSearchQuery}
-              oninput={(e: Event) => {
-                currentSearchQuery = (e.target as HTMLInputElement).value;
-                searchOpen = currentSearchQuery.trim().length > 0;
-              }}
-            />
-            <button
-              class="search-input__clear"
-              class:search-input__clear--visible={currentSearchQuery.length > 0}
-              type="button"
-              aria-label="Suche löschen"
-              onclick={() => {
-                currentSearchQuery = '';
-                searchOpen = false;
-              }}
-            >
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-          <div
-            class="search-input__results"
-            id="admin-search-results"
-          >
-            <SearchResults
-              searchQuery={currentSearchQuery}
-              {filteredAdmins}
-              {labels}
-              onresultClick={(adminId: number) => {
-                openEditModal(adminId);
-                searchOpen = false;
-                currentSearchQuery = '';
-              }}
-            />
-          </div>
+            <i class="fas fa-times"></i>
+          </button>
         </div>
       </div>
     </div>
 
     <div class="card__body">
-      {#if error}
+      {#if error !== null}
         <div class="p-6 text-center">
           <i class="fas fa-exclamation-triangle mb-4 text-4xl text-(--color-danger)"></i>
           <p class="text-(--color-text-secondary)">{error}</p>
@@ -498,7 +540,7 @@
             onclick={() => invalidateAll()}>{messages.BTN_RETRY}</button
           >
         </div>
-      {:else if filteredAdmins.length === 0}
+      {:else if allAdmins.length === 0}
         <div
           id="admins-empty"
           class="empty-state"
@@ -529,7 +571,7 @@
         <div id="admins-table-content">
           <div class="table-responsive">
             <table
-              class="data-table data-table--hover data-table--striped"
+              class="data-table data-table--hover data-table--striped data-table--actions-hover"
               id="admins-table"
             >
               <thead>
@@ -551,7 +593,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each paginatedAdmins as admin (admin.id)}
+                {#each allAdmins as admin (admin.id)}
                   <AdminTableRow
                     {admin}
                     {labels}
@@ -570,48 +612,73 @@
               </tbody>
             </table>
           </div>
-          {#if totalPages > 1}
+
+          <!-- Pagination — URL-driven, anchor-based for native back/forward + right-click support -->
+          {#if pagination.totalPages > 1}
             <nav
               class="pagination"
               id="admins-pagination"
+              aria-label="Seitennavigation"
             >
-              <button
-                type="button"
-                class="pagination__btn pagination__btn--prev"
-                onclick={handlePreviousPage}
-                disabled={currentPage === 1}
-              >
-                <i class="fas fa-chevron-left"></i> Zurück
-              </button>
+              {#if pagination.hasPrev}
+                <a
+                  class="pagination__btn pagination__btn--prev"
+                  href={pageHref(pagination.page - 1)}
+                  rel="prev"
+                >
+                  <i class="fas fa-chevron-left"></i> Zurück
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--prev"
+                  disabled
+                >
+                  <i class="fas fa-chevron-left"></i> Zurück
+                </button>
+              {/if}
+
               <div class="pagination__pages">
-                {#each visiblePages as page, i (i)}
-                  {#if page.type === 'ellipsis'}
-                    <span class="pagination__ellipsis">...</span>
-                  {:else if page.type === 'page'}
-                    <button
-                      type="button"
-                      class="pagination__page"
-                      class:pagination__page--active={page.active}
-                      onclick={() => {
-                        goToPage(page.value);
-                      }}
+                {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
+                  {#if page === pagination.page}
+                    <span
+                      class="pagination__page pagination__page--active"
+                      aria-current="page"
                     >
-                      {page.value}
-                    </button>
+                      {page}
+                    </span>
+                  {:else}
+                    <a
+                      class="pagination__page"
+                      href={pageHref(page)}
+                    >
+                      {page}
+                    </a>
                   {/if}
                 {/each}
               </div>
+
               <span class="pagination__info">
-                Seite {currentPage} von {totalPages} ({filteredAdmins.length} Einträge)
+                Seite {pagination.page} von {pagination.totalPages} ({pagination.total} Einträge)
               </span>
-              <button
-                type="button"
-                class="pagination__btn pagination__btn--next"
-                onclick={handleNextPage}
-                disabled={currentPage === totalPages}
-              >
-                Weiter <i class="fas fa-chevron-right"></i>
-              </button>
+
+              {#if pagination.hasNext}
+                <a
+                  class="pagination__btn pagination__btn--next"
+                  href={pageHref(pagination.page + 1)}
+                  rel="next"
+                >
+                  Weiter <i class="fas fa-chevron-right"></i>
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--next"
+                  disabled
+                >
+                  Weiter <i class="fas fa-chevron-right"></i>
+                </button>
+              {/if}
             </nav>
           {/if}
         </div>

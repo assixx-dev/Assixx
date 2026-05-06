@@ -67,15 +67,27 @@ export interface UserTeamRow {
 }
 
 /**
- * Pagination result
+ * Pagination result — canonical ADR-007 envelope shape.
+ *
+ * Key naming follows ADR-007 §"pagination" verbatim (`page`/`limit`/`total`/
+ * `totalPages`) so the FE `apiFetchPaginated<T>` type-guard
+ * (`frontend/src/lib/server/api-fetch.ts` `isCompletePagination`) accepts it
+ * directly without an aliasing layer. Renamed from
+ * `currentPage`/`pageSize`/`totalItems` per FEAT_SERVER_DRIVEN_PAGINATION
+ * Phase 4 Step 4.1a (2026-05-04, masterplan §Spec Deviations D4) —
+ * greenfield (CLAUDE.md §"Greenfield-Production"), no backwards-compat shim.
+ *
+ * `totalPages` math: `total === 0 ? 0 : Math.ceil(total / limit)` so the FE
+ * empty-state branch (`pagination.total === 0`) and bounds derivation
+ * (`hasNext = page < totalPages`) stay coherent.
  */
 export interface PaginatedResult<T> {
   data: T[];
   pagination: {
-    currentPage: number;
+    page: number;
+    limit: number;
+    total: number;
     totalPages: number;
-    pageSize: number;
-    totalItems: number;
   };
 }
 

@@ -1,16 +1,21 @@
 <script lang="ts">
+  import PickerTypeahead from '$lib/components/PickerTypeahead.svelte';
+
   import { TYPE_OPTIONS } from './constants';
-  import {
-    getStatusBadgeClass,
-    getStatusLabel,
-    getTypeLabel,
-    getAreaLeadDisplayName,
-  } from './utils';
+  import { getStatusBadgeClass, getStatusLabel, getTypeLabel } from './utils';
 
+  import type { PickerOption } from '$lib/components/picker-typeahead-helpers';
   import type { AreaMessages } from './constants';
-  import type { FormIsActiveStatus, AreaType, AdminUser, Department, Hall } from './types';
+  import type { FormIsActiveStatus, AreaType, Department, Hall } from './types';
 
-  // Props with bindable for two-way binding
+  /**
+   * Lead-candidate pickers (area lead + deputy) consume the unified
+   * PickerTypeahead component (FEAT_SERVER_DRIVEN_PAGINATION §4.12 §D23).
+   * Both bindings are full PickerOption objects, NOT scalar IDs — the
+   * page-level form extracts `.id` on submit. Lifts the silent 10-row
+   * server cap that applied while the SSR fetch shipped no `?limit=`
+   * (Audit B2).
+   */
   interface Props {
     show: boolean;
     isEditMode: boolean;
@@ -18,14 +23,13 @@
     messages: AreaMessages;
     formName: string;
     formDescription: string;
-    formAreaLeadId: number | null;
-    formAreaDeputyLeadId: number | null;
+    formAreaLead: PickerOption | null;
+    formAreaDeputyLead: PickerOption | null;
     formType: AreaType;
     formCapacity: number | null;
     formDepartmentIds: number[];
     formHallIds: number[];
     formIsActive: FormIsActiveStatus;
-    areaLeads: AdminUser[];
     allDepartments: Department[];
     allHalls: Hall[];
     submitting: boolean;
@@ -35,20 +39,19 @@
 
   /* eslint-disable prefer-const, @typescript-eslint/no-useless-default-assignment -- Svelte $bindable() requires let and is not a useless default */
   // prettier-ignore
-  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaLeadId = $bindable(), formAreaDeputyLeadId = $bindable(), formType = $bindable(), formCapacity = $bindable(), formDepartmentIds = $bindable(), formHallIds = $bindable(), formIsActive = $bindable(), areaLeads, allDepartments, allHalls, submitting, onclose, onsubmit }: Props = $props();
+  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaLead = $bindable(), formAreaDeputyLead = $bindable(), formType = $bindable(), formCapacity = $bindable(), formDepartmentIds = $bindable(), formHallIds = $bindable(), formIsActive = $bindable(), allDepartments, allHalls, submitting, onclose, onsubmit }: Props = $props();
   /* eslint-enable prefer-const, @typescript-eslint/no-useless-default-assignment */
 
-  // Local dropdown states
+  // Local dropdown states (lead/deputy dropdowns are now owned by
+  // PickerTypeahead — only type + status remain modal-local).
   let typeDropdownOpen = $state(false);
   let statusDropdownOpen = $state(false);
-  let areaLeadDropdownOpen = $state(false);
-  let areaDeputyLeadDropdownOpen = $state(false);
 
-  // Derived area lead display name
-  const areaLeadDisplayName = $derived(getAreaLeadDisplayName(formAreaLeadId, areaLeads));
-  const areaDeputyLeadDisplayName = $derived(
-    getAreaLeadDisplayName(formAreaDeputyLeadId, areaLeads),
-  );
+  // Picker filters: shared dataset for lead + deputy. No `role=` filter so
+  // backend returns admin + root candidates with `position=area_lead`
+  // mixed in one search response (matches the pre-Phase-4.12 admins+roots
+  // merge that the SSR fetch built explicitly).
+  const areaLeadPickerParams = { isActive: '1', position: 'area_lead' } as const;
 
   // =============================================================================
   // DROPDOWN HANDLERS
@@ -57,8 +60,6 @@
   function toggleTypeDropdown(e: MouseEvent): void {
     e.stopPropagation();
     statusDropdownOpen = false;
-    areaLeadDropdownOpen = false;
-    areaDeputyLeadDropdownOpen = false;
     typeDropdownOpen = !typeDropdownOpen;
   }
 
@@ -70,8 +71,6 @@
   function toggleStatusDropdown(e: MouseEvent): void {
     e.stopPropagation();
     typeDropdownOpen = false;
-    areaLeadDropdownOpen = false;
-    areaDeputyLeadDropdownOpen = false;
     statusDropdownOpen = !statusDropdownOpen;
   }
 
@@ -80,50 +79,17 @@
     statusDropdownOpen = false;
   }
 
-  function toggleAreaLeadDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    typeDropdownOpen = false;
-    statusDropdownOpen = false;
-    areaDeputyLeadDropdownOpen = false;
-    areaLeadDropdownOpen = !areaLeadDropdownOpen;
-  }
-
-  function selectAreaLead(id: number | null): void {
-    formAreaLeadId = id;
-    areaLeadDropdownOpen = false;
-  }
-
-  function toggleAreaDeputyLeadDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    typeDropdownOpen = false;
-    statusDropdownOpen = false;
-    areaLeadDropdownOpen = false;
-    areaDeputyLeadDropdownOpen = !areaDeputyLeadDropdownOpen;
-  }
-
-  function selectAreaDeputyLead(id: number | null): void {
-    formAreaDeputyLeadId = id;
-    areaDeputyLeadDropdownOpen = false;
-  }
-
   // Reset local UI state when modal opens
   $effect(() => {
     if (show) {
       typeDropdownOpen = false;
       statusDropdownOpen = false;
-      areaLeadDropdownOpen = false;
-      areaDeputyLeadDropdownOpen = false;
     }
   });
 
   // Close dropdowns on outside click
   $effect(() => {
-    if (
-      typeDropdownOpen ||
-      statusDropdownOpen ||
-      areaLeadDropdownOpen ||
-      areaDeputyLeadDropdownOpen
-    ) {
+    if (typeDropdownOpen || statusDropdownOpen) {
       const handleClick = (e: MouseEvent): void => {
         const target = e.target as HTMLElement;
         if (typeDropdownOpen && !target.closest('#type-dropdown')) {
@@ -131,12 +97,6 @@
         }
         if (statusDropdownOpen && !target.closest('#status-dropdown')) {
           statusDropdownOpen = false;
-        }
-        if (areaLeadDropdownOpen && !target.closest('#area-lead-dropdown')) {
-          areaLeadDropdownOpen = false;
-        }
-        if (areaDeputyLeadDropdownOpen && !target.closest('#area-deputy-lead-dropdown')) {
-          areaDeputyLeadDropdownOpen = false;
         }
       };
       document.addEventListener('click', handleClick, true);
@@ -214,15 +174,19 @@
           ></textarea>
         </div>
 
-        <!-- Area Lead Dropdown -->
+        <!-- Area Lead Picker (typeahead).
+             Label rendered as <span> + linked via PickerTypeahead's
+             `labelledBy` prop (aria-labelledby on the inner input) —
+             a <label for=> would orphan because the picker owns its
+             input id. -->
         <div class="form-field">
-          <label
+          <span
             class="form-field__label"
-            for="area-lead-hidden"
+            id="area-lead-label"
           >
             <i class="fas fa-user-tie mr-1"></i>
             {messages.LABEL_AREA_LEAD}
-          </label>
+          </span>
           <div
             class="alert alert--info alert--sm"
             style="margin-bottom: var(--spacing-3);"
@@ -238,113 +202,29 @@
               </p>
             </div>
           </div>
-          <input
-            type="hidden"
-            id="area-lead-hidden"
-            value={formAreaLeadId ?? ''}
+          <PickerTypeahead
+            bind:value={formAreaLead}
+            searchParams={areaLeadPickerParams}
+            labelledBy="area-lead-label"
+            placeholderText={messages.NO_AREA_LEAD}
           />
-          {#if areaLeads.length > 0}
-            <div
-              class="dropdown"
-              id="area-lead-dropdown"
-            >
-              <button
-                type="button"
-                class="dropdown__trigger"
-                class:active={areaLeadDropdownOpen}
-                onclick={toggleAreaLeadDropdown}
-              >
-                <span>{areaLeadDisplayName}</span>
-                <i class="fas fa-chevron-down"></i>
-              </button>
-              <div
-                class="dropdown__menu"
-                class:active={areaLeadDropdownOpen}
-              >
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectAreaLead(null);
-                  }}
-                >
-                  {messages.NO_AREA_LEAD}
-                </button>
-                {#each areaLeads as user (user.id)}
-                  <button
-                    type="button"
-                    class="dropdown__option"
-                    onclick={() => {
-                      selectAreaLead(user.id);
-                    }}
-                  >
-                    {user.firstName}
-                    {user.lastName}
-                    {user.role === 'root' ? '(Root)' : '(Admin)'}
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
         </div>
 
-        <!-- Area Deputy Lead Dropdown -->
+        <!-- Area Deputy Lead Picker (typeahead). Span-as-label, see above. -->
         <div class="form-field">
-          <label
+          <span
             class="form-field__label"
-            for="area-deputy-lead-hidden"
+            id="area-deputy-lead-label"
           >
             <i class="fas fa-user-shield mr-1"></i>
             Stellvertreter
-          </label>
-          <input
-            type="hidden"
-            id="area-deputy-lead-hidden"
-            value={formAreaDeputyLeadId ?? ''}
+          </span>
+          <PickerTypeahead
+            bind:value={formAreaDeputyLead}
+            searchParams={areaLeadPickerParams}
+            labelledBy="area-deputy-lead-label"
+            placeholderText="— Kein Stellvertreter —"
           />
-          {#if areaLeads.length > 0}
-            <div
-              class="dropdown"
-              id="area-deputy-lead-dropdown"
-            >
-              <button
-                type="button"
-                class="dropdown__trigger"
-                class:active={areaDeputyLeadDropdownOpen}
-                onclick={toggleAreaDeputyLeadDropdown}
-              >
-                <span>{areaDeputyLeadDisplayName}</span>
-                <i class="fas fa-chevron-down"></i>
-              </button>
-              <div
-                class="dropdown__menu"
-                class:active={areaDeputyLeadDropdownOpen}
-              >
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectAreaDeputyLead(null);
-                  }}
-                >
-                  — Kein Stellvertreter —
-                </button>
-                {#each areaLeads as user (user.id)}
-                  <button
-                    type="button"
-                    class="dropdown__option"
-                    onclick={() => {
-                      selectAreaDeputyLead(user.id);
-                    }}
-                  >
-                    {user.firstName}
-                    {user.lastName}
-                    {user.role === 'root' ? '(Root)' : '(Admin)'}
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
         </div>
 
         <!-- Type Dropdown -->

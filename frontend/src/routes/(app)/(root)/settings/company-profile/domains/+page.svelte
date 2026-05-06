@@ -26,16 +26,16 @@
   import {
     addDomain,
     closeAddModal,
+    closeInstructions,
     getAddModalOpen,
-    getInstructionsPanel,
+    getOpenInstructionsId,
     getPendingActionId,
-    hideInstructions,
     openAddModal,
+    openInstructionsFor,
     removeDomain,
     setAddModalSubmitting,
     setPendingActionId,
     setPrimary,
-    showInstructions,
     verifyDomain,
   } from './_lib/state.svelte.js';
   import VerifyInstructionsPanel from './_lib/VerifyInstructionsPanel.svelte';
@@ -70,7 +70,20 @@
   const domains = $derived(data.domains);
   const showAddModal = $derived(getAddModalOpen());
   const pendingActionId = $derived(getPendingActionId());
-  const instructionsPanel = $derived(getInstructionsPanel());
+
+  // ADR-049 (amendment 2026-05-04): single source of truth for the panel is
+  // `data.domains`. UI state holds only the open ID; the row + instructions
+  // are looked up here. Returns `undefined` when (a) no panel is open,
+  // (b) the row was removed, or (c) the row is verified — all three cases
+  // hide the panel without an explicit `closeInstructions()` call. Stale
+  // `openInstructionsId` after auto-hide is harmless: next `openInstructions
+  // For()` overwrites it; on full reload it's reset to null anyway.
+  const openInstructionsId = $derived(getOpenInstructionsId());
+  const instructionsRow = $derived(
+    openInstructionsId !== null ?
+      domains.find((d) => d.id === openInstructionsId && d.status !== 'verified')
+    : undefined,
+  );
 
   // --- Handlers ---
 
@@ -78,11 +91,6 @@
     setAddModalSubmitting(true);
     try {
       const created = await addDomain(domain);
-      // §0.2.5 #10: verificationInstructions are emitted ONLY on this response
-      // — capture them now or they're gone. Surface immediately.
-      if (created.verificationInstructions !== undefined) {
-        showInstructions(created.id, created.domain, created.verificationInstructions);
-      }
       closeAddModal();
       showSuccessAlert(`Domain ${created.domain} hinzugefügt.`);
       // Refresh `data.domains` so the new pending row appears in the table
@@ -90,7 +98,14 @@
       // comment above), so without this the new row would only appear on the
       // next manual navigation. Mirrors the verify-success pattern from
       // masterplan v0.3.0 S4 / ADR-049 §5.1.
+      //
+      // Order matters (ADR-049 amendment 2026-05-04): `openInstructionsFor`
+      // AFTER `invalidateAll` so the panel render guard
+      // (`domains.find(d => d.id === openInstructionsId && status !== 'verified')`)
+      // already sees the new row. Setting it before would briefly fail the
+      // guard during the ~100ms invalidation round-trip → panel flicker.
       await invalidateAll();
+      openInstructionsFor(created.id);
     } catch (err: unknown) {
       // ApiError surfaces backend codes — the German messages live server-side
       // (validateBusinessDomain throws ConflictException with German messages
@@ -230,7 +245,7 @@
         <div id="domains-table-content">
           <div class="table-responsive">
             <table
-              class="data-table data-table--hover data-table--striped"
+              class="data-table data-table--hover data-table--striped data-table--actions-hover"
               id="domains-table"
             >
               <thead>
@@ -250,6 +265,7 @@
                     onverify={handleVerify}
                     onprimary={handleSetPrimary}
                     onremove={handleRemove}
+                    oninstructions={openInstructionsFor}
                   />
                 {/each}
               </tbody>
@@ -260,11 +276,21 @@
     </div>
   </div>
 
-  {#if instructionsPanel !== null}
+  <!--
+    Single source of truth = `data.domains` (ADR-049 amendment 2026-05-04).
+    `instructionsRow` is the looked-up row for the open ID, narrowed to
+    non-verified + non-removed; `verificationInstructions` is guaranteed
+    present by the backend for non-verified rows but TS still needs an
+    `!== undefined` guard because the field is `?:` (verified rows omit it).
+    Auto-hide on verify / removal / cross-tab change happens reactively via
+    the `instructionsRow` derivation — no imperative `closeInstructions()`
+    needed here.
+  -->
+  {#if instructionsRow?.verificationInstructions !== undefined}
     <VerifyInstructionsPanel
-      domain={instructionsPanel.domain}
-      instructions={instructionsPanel.instructions}
-      onclose={hideInstructions}
+      domain={instructionsRow.domain}
+      instructions={instructionsRow.verificationInstructions}
+      onclose={closeInstructions}
     />
   {/if}
 </div>

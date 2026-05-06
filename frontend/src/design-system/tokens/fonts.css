@@ -1,0 +1,82 @@
+/**
+ * Self-Hosted Web Fonts via @fontsource
+ *
+ * Why self-hosted: LG München I, 20.01.2022 (3 O 17493/20) — direct loading
+ * from `fonts.googleapis.com` / `fonts.gstatic.com` transmits user IPs to
+ * Google before any consent and violates DSGVO. Both fonts below are pulled
+ * from npm packages, resolved+bundled by Vite, served from the same origin.
+ * Zero third-party transmission.
+ *
+ * Why @fontsource (and NOT manual TTF→WOFF2 conversion):
+ *   - Pre-compressed by Google's official woff2 pipeline → variable-axis
+ *     metadata (fvar/STAT/HVAR/MVAR) intact, no OTS sanitizer rejection.
+ *   - First attempt used `pnpm dlx ttf2woff2 < input > output` — pnpm's own
+ *     "Progress: resolved..." stdout messages contaminated the binary stream
+ *     before the tool could write. Result: file started with ASCII text
+ *     instead of `wOF2` magic bytes → Firefox sanitizer rejected.
+ *   - npm packages are version-pinned via pnpm-lock.yaml → reproducible
+ *     across machines, automatic updates via `pnpm update`.
+ *
+ * Family-name notice — Outfit: `@fontsource-variable/outfit` registers the
+ * family as `'Outfit Variable'` (intentional, distinguishes from static-weight
+ * Outfit to prevent accidental synthesis). Our `--font-primary` token in
+ * `design-system/variables-light.css` lists `'Outfit Variable'` first and
+ * keeps `'Outfit'` as a defensive fallback for any historic CSS still
+ * referencing the bare name.
+ *
+ * Family-name notice — Material Symbols: `@fontsource/material-symbols-outlined`
+ * registers `'Material Symbols Outlined'` matching the family Google's API
+ * used. Only weight 400 is imported via the explicit `/400.css` subpath —
+ * the package's barrel `index.css` would import all 7 weights (~2.4 MB).
+ * Static (non-variable) variant is sufficient: Assixx uses fixed
+ * `opsz=24, wght=400, FILL=0`. The Variable variant (`@fontsource-variable/…`)
+ * is ~600+ KB even unused-axis-frozen and adds no value here.
+ *
+ * Material Symbols class definition (BELOW): fontsource registers @font-face
+ * only — it does NOT ship a `.material-symbols-outlined` utility class. We
+ * recreate it explicitly because every existing `<span class="material-
+ * symbols-outlined">name</span>` in the codebase relies on the OpenType
+ * ligature feature ('liga') to substitute the text "name" with the actual
+ * icon glyph. Without `font-feature-settings: 'liga'`, the literal text
+ * renders. Class definition is verbatim from Google's previous CSS API
+ * response except `font-weight: 400` (was `normal`, equivalent per spec) and
+ * the inclusion of both `font-feature-settings` and the legacy
+ * `-webkit-font-feature-settings` for older Safari/iOS WebKit builds.
+ *
+ * Licenses: Outfit = SIL Open Font License 1.1
+ * (`node_modules/@fontsource-variable/outfit/LICENSE`, public copy at
+ * `frontend/static/fonts/OFL.txt`). Material Symbols = Apache License 2.0
+ * (`node_modules/@fontsource/material-symbols-outlined/LICENSE`).
+ */
+
+@import '@fontsource-variable/outfit';
+@import '@fontsource/material-symbols-outlined/400.css';
+
+/* Material Symbols utility class — recreated from Google's CSS API output.
+ * Required by 21+ <span class="material-symbols-outlined">name</span> usages
+ * across the codebase (RoleSwitch, dropdowns, rate-limit page, landing,
+ * roadmap). Ligature substitution depends on 'liga' OpenType feature.
+ */
+.material-symbols-outlined {
+  display: inline-block;
+
+  direction: ltr;
+  font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: normal;
+  white-space: nowrap;
+  overflow-wrap: normal;
+
+  /* sans-serif fallback satisfies stylelint
+   * `font-family-no-missing-generic-family-keyword`. Functional impact: if the
+   * Material Symbols WOFF2 fails to load, the literal ligature names
+   * (e.g. "hourglass_check") render as plain sans-serif text instead of in an
+   * arbitrary serif default — degraded but legible.
+   */
+  font-family: 'Material Symbols Outlined', sans-serif;
+  font-weight: 400;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  text-transform: none;
+}

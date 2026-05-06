@@ -307,22 +307,31 @@ export class KvpService {
     const suggestions = await this.db.tenantQuery<DbSuggestion>(query, params);
     const transformed = suggestions.map((s: DbSuggestion) => transformSuggestion(s));
 
+    // ADR-007 canonical pagination envelope (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.5a).
+    // Wrapper key `items` is detected by ResponseInterceptor.isPaginatedResponse and
+    // flattened to `{ data: T[], meta: { pagination } }`. `totalPages = 0` when no rows
+    // — matches dummy-users reference impl (Phase 3.1) and keeps FE empty-state +
+    // `hasNext = page < totalPages` derivation consistent.
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
     return {
-      suggestions: transformed,
-      pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(total / limit),
-        pageSize: limit,
-        totalItems: total,
-      },
+      items: transformed,
+      pagination: { page, limit, total, totalPages },
     };
   }
 
   /** Execute count query by stripping confirmation JOIN and adjusting placeholders */
   private async executeCountQuery(query: string, params: unknown[]): Promise<number> {
     const { countQuery, countParams } = buildCountQuery(query, params);
-    const countRows = await this.db.tenantQuery<{ total: number }>(countQuery, countParams);
-    return countRows[0]?.total ?? 0;
+    // pg returns COUNT(*) bigint as string — coerce to number (mirrors line 250
+    // pattern in getDashboardStats). Pre-Phase-4.5a this drift was masked because
+    // the broken envelope never surfaced `meta.pagination.total` to the FE; the
+    // new canonical envelope test (kvp.api.test.ts §"canonical ADR-007 envelope")
+    // now enforces `typeof total === 'number'`.
+    const countRows = await this.db.tenantQuery<{ total: string | number }>(
+      countQuery,
+      countParams,
+    );
+    return Number(countRows[0]?.total ?? 0);
   }
 
   /** Get suggestion by ID (numeric or UUID) */

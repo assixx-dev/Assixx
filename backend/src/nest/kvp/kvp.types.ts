@@ -288,13 +288,26 @@ export interface DashboardStats {
   teamImplementedSuggestions: number;
 }
 
+/**
+ * Canonical paginated envelope. Wrapper key `items` is the first key
+ * `ResponseInterceptor.isPaginatedResponse` (response.interceptor.ts:65)
+ * recognises — it then flattens the response to ADR-007 shape
+ * `{ data: T[], meta: { pagination } }`. Pagination keys mirror the FE
+ * helper contract (`apiFetchPaginated`, frontend/src/lib/server/api-fetch.ts).
+ *
+ * WHY rewritten 2026-05-05: pre-this-date the shape was
+ * `{ suggestions, pagination: { currentPage, pageSize, totalItems } }` —
+ * the interceptor could not detect `suggestions` as a paginated wrapper, so
+ * NO `meta.pagination` was ever emitted. See FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md
+ * §D9 + Step 4.5a.
+ */
 export interface PaginatedSuggestionsResult {
-  suggestions: KVPSuggestionResponse[];
+  items: KVPSuggestionResponse[];
   pagination: {
-    currentPage: number;
+    page: number;
+    limit: number;
+    total: number;
     totalPages: number;
-    pageSize: number;
-    totalItems: number;
   };
 }
 

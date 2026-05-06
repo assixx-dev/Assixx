@@ -79,13 +79,14 @@ describe('List Work Orders (before mark-as-read)', () => {
   });
 
   it('should return paginated items', () => {
-    expect(body.data).toHaveProperty('items');
-    expect(Array.isArray(body.data.items)).toBe(true);
-    expect(body.data).toHaveProperty('total');
+    // ADR-007 canonical envelope (Phase 4.7a, changelog 1.19.0): `body.data` is
+    // the array directly; pagination metadata lives under `body.meta.pagination`.
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta?.pagination).toHaveProperty('total');
   });
 
   it('should include isRead field on list items', () => {
-    const items = body.data.items as JsonBody[];
+    const items = body.data as JsonBody[];
     expect(items.length).toBeGreaterThan(0);
 
     const testItem = items.find((i: JsonBody) => i.uuid === workOrderUuid);
@@ -95,7 +96,7 @@ describe('List Work Orders (before mark-as-read)', () => {
   });
 
   it('should have isRead=false for newly created work order', () => {
-    const items = body.data.items as JsonBody[];
+    const items = body.data as JsonBody[];
     const testItem = items.find((i: JsonBody) => i.uuid === workOrderUuid);
     expect(testItem!.isRead).toBe(false);
   });
@@ -145,7 +146,8 @@ describe('List Work Orders (after mark-as-read)', () => {
   });
 
   it('should have isRead=true for the marked work order', () => {
-    const items = body.data.items as JsonBody[];
+    // ADR-007 canonical envelope (Phase 4.7a) — `body.data` is the array directly.
+    const items = body.data as JsonBody[];
     const testItem = items.find((i: JsonBody) => i.uuid === workOrderUuid);
     expect(testItem).toBeDefined();
     expect(testItem!.isRead).toBe(true);

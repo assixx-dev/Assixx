@@ -60,16 +60,18 @@ export interface RootUserLookup {
 }
 
 // =============================================================================
-// Approvals List — pagination types
+// Approvals List — single-row type
 // =============================================================================
 //
-// Mirrors backend `PaginatedApprovals` shape (see ApprovalsController list
-// endpoint). Shared between +page.server.ts (SSR) and +page.svelte (client
-// page-change re-fetch via listApprovals). Phase-2 server-driven pagination
-// pattern — see docs/how-to/HOW-TO-FIX-MANAGE-PAGINATION.md.
+// Phase 4.3b (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN changelog 1.13.0):
+// the client-side `PaginatedApprovals` envelope was deleted with the URL-state
+// migration. Pagination metadata is now consumed via `apiFetchPaginated*`'s
+// shared `PaginationMeta` type ($lib/server/api-fetch); only the per-row
+// projection lives here.
 
 /**
- * Single approval row as delivered by `/approvals?page=N&limit=N`. Fields
+ * Single approval row as delivered by `/approvals` (ADR-007 envelope:
+ * items array on `body.data`, pagination on `body.meta.pagination`). Fields
  * mirror the backend `ApprovalListItem` projection. The +page.svelte UI
  * consumes a subset (no `requestedBy`/`assignedTo`/`decidedBy` IDs needed —
  * names are sufficient for display) but the full shape is kept here so the
@@ -95,12 +97,4 @@ export interface ApprovalListItem {
   rewardAmount: number | null;
   isRead: boolean;
   createdAt: string;
-}
-
-/** Paginated list envelope — matches backend `PaginatedApprovals`. */
-export interface PaginatedApprovals {
-  items: ApprovalListItem[];
-  total: number;
-  page: number;
-  pageSize: number;
 }

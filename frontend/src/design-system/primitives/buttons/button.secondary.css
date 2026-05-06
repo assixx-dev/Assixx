@@ -22,7 +22,6 @@
   border-radius: var(--radius-xl);
 
   /* ========== BACKGROUND ========== */
-  backdrop-filter: var(--blur-sm); /* Glass effect */
   background: oklch(65.82% 0.169 248.81 / 4%); /* Brand blue tint at 4% */
 
   /* ========== SPACING ========== */

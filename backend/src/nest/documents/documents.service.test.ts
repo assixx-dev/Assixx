@@ -554,7 +554,7 @@ describe('DocumentsService', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should return paginated documents for admin', async () => {
+    it('should return paginated documents for admin (Phase 4.9a wrapper key = items)', async () => {
       // getUserById → admin
       mockDb.tenantQuery.mockResolvedValueOnce([{ role: 'admin' }]);
       mockAccess.buildDocumentQuery.mockReturnValueOnce({
@@ -576,9 +576,79 @@ describe('DocumentsService', () => {
         isActive: 1,
       } as never);
 
-      expect(result.documents).toHaveLength(2);
+      // §D18: wrapper key is `items` (was `documents` pre-4.9a) — see masterplan.
+      expect(result.items).toHaveLength(2);
       expect(result.pagination.total).toBe(25);
       expect(result.pagination.totalPages).toBe(3);
+    });
+  });
+
+  // =============================================================
+  // listDocuments — sort dispatch (Phase 4.9a / §D18)
+  // =============================================================
+
+  describe('listDocuments — sort dispatch', () => {
+    /** Prep mocks for an empty-result listDocuments call */
+    function setupEmptyListMocks(): void {
+      mockDb.tenantQuery.mockResolvedValueOnce([{ role: 'admin' }]); // getUserById
+      mockAccess.buildDocumentQuery.mockReturnValueOnce({
+        baseQuery: 'SELECT d.* FROM documents d WHERE d.tenant_id = $1 AND d.is_active = $2',
+        params: [42, 1],
+        paramIndex: 3,
+      });
+      mockDb.tenantQuery.mockResolvedValueOnce([{ count: '0' }]); // getDocumentsCount
+      mockDb.tenantQuery.mockResolvedValueOnce([]); // paginated query (empty)
+    }
+
+    it('should default to uploaded_at DESC when sort omitted (newest)', async () => {
+      setupEmptyListMocks();
+
+      await service.listDocuments(42, 1, { page: 1, limit: 10, isActive: 1 } as never);
+
+      const sql = mockDb.tenantQuery.mock.calls[2]?.[0] as string;
+      expect(sql).toContain('ORDER BY d.uploaded_at DESC NULLS LAST, d.id ASC');
+    });
+
+    it('should sort by uploaded_at ASC when sort=oldest', async () => {
+      setupEmptyListMocks();
+
+      await service.listDocuments(42, 1, {
+        page: 1,
+        limit: 10,
+        isActive: 1,
+        sort: 'oldest',
+      } as never);
+
+      const sql = mockDb.tenantQuery.mock.calls[2]?.[0] as string;
+      expect(sql).toContain('ORDER BY d.uploaded_at ASC NULLS LAST, d.id ASC');
+    });
+
+    it('should sort by filename ASC when sort=name', async () => {
+      setupEmptyListMocks();
+
+      await service.listDocuments(42, 1, {
+        page: 1,
+        limit: 10,
+        isActive: 1,
+        sort: 'name',
+      } as never);
+
+      const sql = mockDb.tenantQuery.mock.calls[2]?.[0] as string;
+      expect(sql).toContain('ORDER BY d.filename ASC, d.id ASC');
+    });
+
+    it('should sort by file_size DESC when sort=size', async () => {
+      setupEmptyListMocks();
+
+      await service.listDocuments(42, 1, {
+        page: 1,
+        limit: 10,
+        isActive: 1,
+        sort: 'size',
+      } as never);
+
+      const sql = mockDb.tenantQuery.mock.calls[2]?.[0] as string;
+      expect(sql).toContain('ORDER BY d.file_size DESC NULLS LAST, d.id ASC');
     });
   });
 

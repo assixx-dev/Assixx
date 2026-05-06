@@ -22,7 +22,7 @@ LABEL org.opencontainers.image.authors="Assixx"
 # Fix CVE-2025-64756: Update npm to get patched glob (>=11.1.0)
 # pnpm AND npm parameterised — versions configurable via docker-compose
 # build args / docker/.env. See ADR-027 §"Amendment 2026-04-27".
-ARG PNPM_VERSION=10.33.2
+ARG PNPM_VERSION=10.33.3
 ARG NPM_VERSION=11.13.0
 RUN npm install -g "npm@${NPM_VERSION}" "pnpm@${PNPM_VERSION}"
 

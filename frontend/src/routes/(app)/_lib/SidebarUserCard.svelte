@@ -184,7 +184,7 @@
 <style>
   .sidebar-footer {
     position: relative;
-    margin: 0 8px 30px;
+    margin: 0 8px 40px;
     border: var(--glass-border);
     border-radius: var(--radius-xl);
     background: var(--glass-bg);
@@ -307,22 +307,26 @@
   }
 
   /* Row wrapper under the card — groups version + bug-report link inline.
-     Negative top margin tucks close to the glass container since
-     .sidebar-footer keeps its own 30px bottom margin for non-version layouts. */
+     Absolutely positioned in the 40px bottom-margin gap of `.sidebar-footer`,
+     so toggling its visibility (collapsed/expanded) doesn't push the avatar
+     button up/down. Anchored to `.sidebar-footer-area` (position: relative)
+     in AppSidebar.svelte. WHY: avatar must stay at the same Y-position
+     regardless of expanded state — without absolute positioning, the
+     {#if !collapsed} block changes flex-layout height and shifts the avatar.
+     See user feedback 2026-05-05 + ADR-012 (sidebar group layout). */
   .sidebar-footer-links {
     display: flex;
+    position: absolute;
+    inset: auto 8px 12px;
     justify-content: center;
     align-items: center;
     gap: 4px;
-
-    margin: -22px 8px 12px;
   }
 
   /* Both links share the same muted tone so the row reads as one utility
      bar. Only the hover state diverges (primary-blue for the action). */
   .sidebar-version {
     padding: 2px 6px;
-
     color: var(--text-secondary, color-mix(in oklch, var(--color-white) 65%, transparent));
 
     font-size: 0.8rem;
@@ -332,6 +336,9 @@
     letter-spacing: 0.3px;
 
     transition: color 0.2s ease;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .sidebar-version:hover,

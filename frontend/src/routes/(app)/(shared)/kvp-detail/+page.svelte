@@ -16,7 +16,6 @@
 
   import ConfirmModal from '$design-system/components/confirm-modal/ConfirmModal.svelte';
 
-  import { filterState } from '../kvp/_lib/state-filters.svelte';
   import { isFaIcon } from '../kvp/_lib/utils';
   import { fetchEligibleUsers } from '../work-orders/_lib/api';
 
@@ -572,7 +571,9 @@
         type="button"
         class="btn btn-light"
         onclick={() => {
-          filterState.reset();
+          // Phase 4.5b (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.5b):
+          // KVP filters are URL-driven now. Navigating to plain `/kvp`
+          // produces the unfiltered default state — no extra reset needed.
           void goto(resolve('/kvp'));
         }}
       >
@@ -1029,7 +1030,6 @@
     color: var(--color-text-primary);
     overflow-wrap: anywhere;
     background: var(--glass-bg);
-    backdrop-filter: var(--glass-backdrop);
     box-shadow: var(--glass-card-shadow);
   }
 

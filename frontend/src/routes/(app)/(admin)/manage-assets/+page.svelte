@@ -1,10 +1,14 @@
 <script lang="ts">
   /**
-   * Manage Assets - Page Component
+   * Manage Assets - Page Component (Phase 4.4b URL-driven state)
    * @module manage-assets/+page
    *
-   * Level 3 SSR: $derived for SSR data, invalidateAll() after mutations.
-   * Note: Uses external state store for UI state (forms, modals, dropdowns).
+   * Mirrors the §4.1b `manage-employees` reference impl per
+   * FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.4b. URL holds pagination +
+   * search + status-filter state — there is NO `$state` shadow of these.
+   * Mutations call `invalidateAll()` to retrigger the load on the same
+   * URL, so `?page=N`/`?search=...`/`?status=...` are preserved across
+   * mutations.
    */
   import { goto, invalidateAll } from '$app/navigation';
   import { resolve } from '$app/paths';
@@ -14,9 +18,10 @@
     MACHINE_AVAILABILITY_LABELS,
     MACHINE_AVAILABILITY_BADGE_CLASSES,
   } from '$lib/asset-availability/constants';
-  import HighlightText from '$lib/components/HighlightText.svelte';
+  import PermissionDenied from '$lib/components/PermissionDenied.svelte';
   import { showSuccessAlert, showErrorAlert } from '$lib/stores/toast';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   const log = createLogger('ManageAssetsPage');
 
@@ -31,13 +36,10 @@
   import AssetFormModal from './_lib/AssetFormModal.svelte';
   import { createMessages } from './_lib/constants';
   import DeleteModals from './_lib/DeleteModals.svelte';
-  import { applyAllFilters } from './_lib/filters';
   import { assetState } from './_lib/state.svelte';
   import {
-    ASSETS_PER_PAGE,
     getEmptyStateTitle,
     getEmptyStateDescription,
-    getVisiblePages,
     buildAssetFormData,
     populateFormFromAsset,
     getTeamsBadgeData,
@@ -49,20 +51,28 @@
   import type { PageData } from './$types';
   import type { AssetStatusFilter } from './_lib/types';
 
-  // =============================================================================
-  // SSR DATA - Level 3: $derived from props (single source of truth)
-  // =============================================================================
+  // ============================================================================
+  // SSR DATA — URL is the single source of truth for page / search / status.
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.4b: there is NO client `$state`
+  // shadow of these — every change goes through `goto()` → load re-run.
+  // ============================================================================
 
   const { data }: { data: PageData } = $props();
+
+  // SSR data via $derived — updates when invalidateAll() / goto() reruns load.
+  // `assets` already represents the current page slice (server-paginated).
+  const assets = $derived(data.assets);
+  const pagination = $derived(data.pagination);
+  const searchTerm = $derived(data.search);
+  const statusFilter = $derived<AssetStatusFilter>(data.statusFilter);
 
   // Hierarchy labels via data inheritance (A6) — reactive
   const labels = $derived(data.hierarchyLabels);
   const messages = $derived(createMessages(labels));
 
-  // SSR data via $derived - updates when invalidateAll() is called
-  const allAssets = $derived(data.assets);
-
-  // Sync SSR data + labels to state store for child components
+  // Sync reference data + labels into the state store for the form modal.
+  // The asset list itself is no longer mirrored here (Phase 4.4b) — pages
+  // read it directly from `data.assets` above.
   $effect(() => {
     assetState.setLabels(data.hierarchyLabels);
     assetState.setDepartments(data.departments);
@@ -70,67 +80,81 @@
     assetState.setTeams(data.teams);
   });
 
-  // Sync assets to state store for openEditModal
-  $effect(() => {
-    assetState.setAssets(allAssets);
-  });
-
-  // =============================================================================
+  // ============================================================================
   // DERIVED VALUES
-  // =============================================================================
+  // ============================================================================
 
-  // Derived: Filtered assets based on current filter/search state
-  const filteredAssets = $derived(
-    applyAllFilters(allAssets, assetState.currentStatusFilter, assetState.currentSearchQuery),
-  );
+  const emptyStateTitle = $derived(getEmptyStateTitle(statusFilter, messages));
+  const emptyStateDescription = $derived(getEmptyStateDescription(statusFilter, messages));
 
-  const emptyStateTitle = $derived(getEmptyStateTitle(assetState.currentStatusFilter, messages));
-  const emptyStateDescription = $derived(
-    getEmptyStateDescription(assetState.currentStatusFilter, messages),
-  );
+  // ============================================================================
+  // CLIENT STATE — only modal open/close + form fields are local. Pagination,
+  // search, and status filter are URL-driven via the helpers below.
+  // ============================================================================
 
-  // Sync filtered assets to state store for search results dropdown
-  $effect(() => {
-    assetState.setFilteredAssets(filteredAssets);
-  });
+  // Search input → URL debouncer. Local-only; URL is the authoritative state.
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const SEARCH_DEBOUNCE_MS = 300;
 
-  // =============================================================================
-  // PAGINATION (client-side, page slice over filteredAssets)
-  // =============================================================================
+  // ============================================================================
+  // URL HELPERS — single source of truth for page / search / status
+  // ============================================================================
 
-  let currentPage = $state(1);
+  const BASE_PATH = '/manage-assets';
 
-  // Pagination — slice the filtered set into the current page. Search dropdown
-  // still reads `filteredAssets` (full set) so a user can jump to a hit on any
-  // page; pagination only governs the table.
-  const totalPages = $derived(Math.max(1, Math.ceil(filteredAssets.length / ASSETS_PER_PAGE)));
-  const paginatedAssets = $derived(
-    filteredAssets.slice((currentPage - 1) * ASSETS_PER_PAGE, currentPage * ASSETS_PER_PAGE),
-  );
-  const visiblePages = $derived(getVisiblePages(currentPage, totalPages));
-
-  // Reset to page 1 when filter set changes — prevents user landing on
-  // an empty page after narrowing search/status. Mount-fire is a no-op.
-  $effect(() => {
-    void assetState.currentStatusFilter;
-    void assetState.currentSearchQuery;
-    currentPage = 1;
-  });
-
-  // Client-side pagination handlers (no URL update — KISS, see utils.ts).
-  function goToPage(p: number): void {
-    if (p >= 1 && p <= totalPages) currentPage = p;
-  }
-  function handlePreviousPage(): void {
-    if (currentPage > 1) currentPage -= 1;
-  }
-  function handleNextPage(): void {
-    if (currentPage < totalPages) currentPage += 1;
+  /**
+   * Build an href for a target page, preserving current search + status.
+   * `buildPaginatedHref` skips defaults (page=1 / search='' / undefined),
+   * so canonical first-page URLs stay clean (`/manage-assets`).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchTerm,
+        status: statusFilter === 'all' ? undefined : statusFilter,
+      }),
+    );
   }
 
-  // =============================================================================
+  /**
+   * Navigate to a new filter/search state. Page resets to 1 (default —
+   * not emitted into the URL).
+   */
+  function navigateFilters(next: { search?: string; statusFilter?: AssetStatusFilter }): void {
+    const nextSearch = next.search ?? searchTerm;
+    const nextStatus = next.statusFilter ?? statusFilter;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1
+        search: nextSearch,
+        status: nextStatus === 'all' ? undefined : nextStatus,
+      }),
+    );
+    void goto(href, { keepFocus: true });
+  }
+
+  function handleStatusToggle(value: AssetStatusFilter): void {
+    navigateFilters({ statusFilter: value });
+  }
+
+  function handleSearchInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const term = input.value;
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      navigateFilters({ search: term });
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function clearSearch(): void {
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    navigateFilters({ search: '' });
+  }
+
+  // ============================================================================
   // API FUNCTIONS - Level 3: invalidateAll() after mutations
-  // =============================================================================
+  // ============================================================================
 
   async function saveAsset() {
     assetState.setSubmitting(true);
@@ -167,7 +191,7 @@
 
       showSuccessAlert(assetState.isEditMode ? messages.SUCCESS_UPDATED : messages.SUCCESS_CREATED);
       assetState.closeAssetModal();
-      // Level 3: Trigger SSR refetch
+      // Retrigger SSR load on the SAME URL (preserves ?page / ?search / ?status).
       await invalidateAll();
     } catch (err: unknown) {
       log.error({ err }, 'Error saving asset');
@@ -184,7 +208,6 @@
       await apiDeleteAsset(assetState.deleteAssetId);
       showSuccessAlert(messages.SUCCESS_DELETED);
       assetState.closeDeleteModal();
-      // Level 3: Trigger SSR refetch
       await invalidateAll();
     } catch (err: unknown) {
       log.error({ err }, 'Error deleting asset');
@@ -192,9 +215,9 @@
     }
   }
 
-  // =============================================================================
+  // ============================================================================
   // MODAL HANDLERS
-  // =============================================================================
+  // ============================================================================
 
   function openAddModal() {
     assetState.setCurrentEditId(null);
@@ -203,7 +226,10 @@
   }
 
   async function openEditModal(assetId: number) {
-    const asset = assetState.allAssets.find((m) => m.id === assetId);
+    // Asset comes from the current SSR page slice (`data.assets`). If the
+    // user navigates pages while a modal is open we never get here — the
+    // table only renders rows from the current slice.
+    const asset = assets.find((m) => m.id === assetId);
     if (!asset) return;
 
     assetState.setCurrentEditId(assetId);
@@ -228,50 +254,18 @@
     assetState.openAssetModal();
   }
 
-  // =============================================================================
-  // STATUS TOGGLE HANDLER
-  // =============================================================================
-
-  function handleStatusToggle(status: AssetStatusFilter) {
-    assetState.setCurrentStatusFilter(status);
-    // filteredAssets is $derived - automatically updates when filter changes
-  }
-
-  // =============================================================================
-  // SEARCH HANDLERS
-  // =============================================================================
-
-  function handleSearchInput(e: Event) {
-    const input = e.target as HTMLInputElement;
-    assetState.setCurrentSearchQuery(input.value);
-    assetState.setSearchOpen(input.value.trim().length > 0);
-    // filteredAssets is $derived - automatically updates when search changes
-  }
-
-  function clearSearch() {
-    assetState.setCurrentSearchQuery('');
-    assetState.setSearchOpen(false);
-    // filteredAssets is $derived - automatically updates
-  }
-
-  function handleSearchResultClick(assetId: number) {
-    void openEditModal(assetId);
-    assetState.setSearchOpen(false);
-    assetState.setCurrentSearchQuery('');
-  }
-
-  // =============================================================================
+  // ============================================================================
   // FORM SUBMIT HANDLER
-  // =============================================================================
+  // ============================================================================
 
   function handleFormSubmit(e: Event) {
     e.preventDefault();
     void saveAsset();
   }
 
-  // =============================================================================
-  // MACHINE AVAILABILITY STATE & HANDLERS
-  // =============================================================================
+  // ============================================================================
+  // ASSET AVAILABILITY STATE & HANDLERS
+  // ============================================================================
 
   let showAvailabilityModal = $state(false);
   let availabilityAsset = $state<{ name: string; uuid: string } | null>(null);
@@ -344,11 +338,16 @@
     }
   }
 
-  // =============================================================================
-  // OUTSIDE CLICK HANDLERS
-  // =============================================================================
+  // ============================================================================
+  // OUTSIDE CLICK HANDLERS — form modal dropdowns only.
+  //
+  // The asset-search dropdown was REMOVED in Phase 4.4b (search is now a
+  // URL-driven debounced query — the table itself shows hits, the dropdown
+  // was redundant). The remaining dropdown configs are ALL for the form
+  // modal (department / area / type / teams) — they keep their outside-
+  // click-to-close behaviour unchanged.
+  // ============================================================================
 
-  // Dropdown configuration for outside click handling
   const dropdownConfigs = [
     {
       isOpen: () => assetState.departmentDropdownOpen,
@@ -378,13 +377,6 @@
         assetState.setTeamsDropdownOpen(false);
       },
     },
-    {
-      isOpen: () => assetState.searchOpen,
-      selector: '.search-input-wrapper',
-      close: () => {
-        assetState.setSearchOpen(false);
-      },
-    },
   ];
 
   function isAnyDropdownOpen(): boolean {
@@ -409,9 +401,9 @@
     }
   });
 
-  // =============================================================================
+  // ============================================================================
   // HELPERS
-  // =============================================================================
+  // ============================================================================
 
   /** Format ISO date string to German locale (dd.mm.yyyy) */
   function formatDate(isoDate: string): string {
@@ -424,121 +416,106 @@
   <title>{messages.PAGE_TITLE}</title>
 </svelte:head>
 
-<div class="container">
-  <div class="card">
-    <div class="card__header">
-      <h2 class="card__title">
-        <i class="fas fa-cogs mr-2"></i>
-        {messages.PAGE_HEADING}
-      </h2>
-      <p class="mt-2 text-(--color-text-secondary)">
-        {messages.PAGE_DESCRIPTION}
-      </p>
+{#if data.permissionDenied}
+  <PermissionDenied addonName="die Anlagenverwaltung" />
+{:else}
+  <div class="container">
+    <div class="card">
+      <div class="card__header">
+        <h2 class="card__title">
+          <i class="fas fa-cogs mr-2"></i>
+          {messages.PAGE_HEADING}
+        </h2>
+        <p class="mt-2 text-(--color-text-secondary)">
+          {messages.PAGE_DESCRIPTION}
+        </p>
 
-      <div class="alert alert--info alert--sm mt-4">
-        <div class="alert__icon"><i class="fas fa-info-circle"></i></div>
-        <div class="alert__content">
-          <div class="alert__message">
-            TPM-Wartungspläne werden hier nicht angezeigt. Diese Übersicht dient primär für
-            außerordentliche Zustände wie ungeplante Reparaturen oder Stillstände.
+        <div class="alert alert--info alert--sm mt-4">
+          <div class="alert__icon"><i class="fas fa-info-circle"></i></div>
+          <div class="alert__content">
+            <div class="alert__message">
+              TPM-Wartungspläne werden hier nicht angezeigt. Diese Übersicht dient primär für
+              außerordentliche Zustände wie ungeplante Reparaturen oder Stillstände.
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="mt-6 flex items-center justify-between gap-4">
-        <!-- Status Toggle Group -->
-        <div
-          class="toggle-group"
-          id="asset-status-toggle"
-        >
-          <button
-            type="button"
-            class="toggle-group__btn"
-            class:active={assetState.currentStatusFilter === 'all'}
-            onclick={() => {
-              handleStatusToggle('all');
-            }}
-          >
-            <i class="fas fa-list"></i>
-            {messages.FILTER_ALL}
-          </button>
-          <button
-            type="button"
-            class="toggle-group__btn"
-            class:active={assetState.currentStatusFilter === 'operational'}
-            onclick={() => {
-              handleStatusToggle('operational');
-            }}
-          >
-            <i class="fas fa-check-circle"></i>
-            {messages.FILTER_OPERATIONAL}
-          </button>
-          <button
-            type="button"
-            class="toggle-group__btn"
-            class:active={assetState.currentStatusFilter === 'maintenance'}
-            onclick={() => {
-              handleStatusToggle('maintenance');
-            }}
-          >
-            <i class="fas fa-wrench"></i>
-            {messages.FILTER_MAINTENANCE}
-          </button>
-          <button
-            type="button"
-            class="toggle-group__btn"
-            class:active={assetState.currentStatusFilter === 'repair'}
-            onclick={() => {
-              handleStatusToggle('repair');
-            }}
-          >
-            <i class="fas fa-tools"></i>
-            {messages.FILTER_REPAIR}
-          </button>
-          <button
-            type="button"
-            class="toggle-group__btn"
-            class:active={assetState.currentStatusFilter === 'standby'}
-            onclick={() => {
-              handleStatusToggle('standby');
-            }}
-          >
-            <i class="fas fa-pause-circle"></i>
-            {messages.FILTER_STANDBY}
-          </button>
-          <button
-            type="button"
-            class="toggle-group__btn"
-            class:active={assetState.currentStatusFilter === 'cleaning'}
-            onclick={() => {
-              handleStatusToggle('cleaning');
-            }}
-          >
-            <i class="fas fa-broom"></i>
-            {messages.FILTER_CLEANING}
-          </button>
-          <button
-            type="button"
-            class="toggle-group__btn"
-            class:active={assetState.currentStatusFilter === 'other'}
-            onclick={() => {
-              handleStatusToggle('other');
-            }}
-          >
-            <i class="fas fa-clock"></i>
-            {messages.FILTER_OTHER}
-          </button>
-        </div>
-
-        <!-- Search Input -->
-        <div
-          class="search-input-wrapper max-w-80"
-          class:search-input-wrapper--open={assetState.searchOpen}
-        >
+        <div class="mt-6 flex items-center justify-between gap-4">
+          <!-- Status Toggle Group — backend `?status=` enum verbatim (D5). -->
           <div
-            class="search-input"
-            id="asset-search-container"
+            class="toggle-group"
+            id="asset-status-toggle"
           >
+            <button
+              type="button"
+              class="toggle-group__btn"
+              class:active={statusFilter === 'all'}
+              onclick={() => {
+                handleStatusToggle('all');
+              }}
+            >
+              <i class="fas fa-list"></i>
+              {messages.FILTER_ALL}
+            </button>
+            <button
+              type="button"
+              class="toggle-group__btn"
+              class:active={statusFilter === 'operational'}
+              onclick={() => {
+                handleStatusToggle('operational');
+              }}
+            >
+              <i class="fas fa-check-circle"></i>
+              {messages.FILTER_OPERATIONAL}
+            </button>
+            <button
+              type="button"
+              class="toggle-group__btn"
+              class:active={statusFilter === 'maintenance'}
+              onclick={() => {
+                handleStatusToggle('maintenance');
+              }}
+            >
+              <i class="fas fa-wrench"></i>
+              {messages.FILTER_MAINTENANCE}
+            </button>
+            <button
+              type="button"
+              class="toggle-group__btn"
+              class:active={statusFilter === 'repair'}
+              onclick={() => {
+                handleStatusToggle('repair');
+              }}
+            >
+              <i class="fas fa-tools"></i>
+              {messages.FILTER_REPAIR}
+            </button>
+            <button
+              type="button"
+              class="toggle-group__btn"
+              class:active={statusFilter === 'standby'}
+              onclick={() => {
+                handleStatusToggle('standby');
+              }}
+            >
+              <i class="fas fa-pause-circle"></i>
+              {messages.FILTER_STANDBY}
+            </button>
+            <button
+              type="button"
+              class="toggle-group__btn"
+              class:active={statusFilter === 'decommissioned'}
+              onclick={() => {
+                handleStatusToggle('decommissioned');
+              }}
+            >
+              <i class="fas fa-power-off"></i>
+              {messages.FILTER_DECOMMISSIONED}
+            </button>
+          </div>
+
+          <!-- Search Input — debounced URL update (300 ms), URL-driven -->
+          <div class="search-input max-w-80">
             <i class="search-input__icon fas fa-search"></i>
             <input
               type="search"
@@ -546,12 +523,12 @@
               class="search-input__field"
               placeholder={messages.SEARCH_PLACEHOLDER}
               autocomplete="off"
-              value={assetState.currentSearchQuery}
+              value={searchTerm}
               oninput={handleSearchInput}
             />
             <button
               class="search-input__clear"
-              class:search-input__clear--visible={assetState.currentSearchQuery.length > 0}
+              class:search-input__clear--visible={searchTerm.length > 0}
               type="button"
               aria-label="Suche löschen"
               onclick={clearSearch}
@@ -559,285 +536,248 @@
               <i class="fas fa-times"></i>
             </button>
           </div>
-          <div
-            class="search-input__results"
-            id="asset-search-results"
-          >
-            {#if assetState.currentSearchQuery && filteredAssets.length === 0}
-              <div class="search-input__no-results">
-                {messages.SEARCH_NO_RESULTS}
-              </div>
-            {:else if assetState.currentSearchQuery}
-              {#each filteredAssets.slice(0, 5) as asset (asset.id)}
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div
-                  class="search-input__result-item"
-                  onclick={() => {
-                    handleSearchResultClick(asset.id);
-                  }}
-                >
-                  <div class="flex flex-col gap-1">
-                    <div class="font-medium text-(--color-text-primary)">
-                      <HighlightText
-                        text={asset.name}
-                        query={assetState.currentSearchQuery}
-                      />
-                    </div>
-                    <div class="text-[0.813rem] text-(--color-text-secondary)">
-                      <HighlightText
-                        text={asset.model ?? ''}
-                        query={assetState.currentSearchQuery}
-                      />
-                      {#if asset.manufacturer}
-                        ·
-                        <HighlightText
-                          text={asset.manufacturer}
-                          query={assetState.currentSearchQuery}
-                        />
-                      {/if}
-                    </div>
-                  </div>
-                </div>
-              {/each}
-              {#if filteredAssets.length > 5}
-                <div
-                  class="search-input__result-item border-t border-white/5 text-center text-[0.813rem] text-(--color-primary)"
-                >
-                  {filteredAssets.length - 5} weitere Ergebnisse in Tabelle
-                </div>
-              {/if}
-            {/if}
-          </div>
         </div>
       </div>
-    </div>
 
-    <div class="card__body">
-      {#if assetState.error}
-        <div class="p-6 text-center">
-          <i class="fas fa-exclamation-triangle mb-4 text-4xl text-(--color-danger)"></i>
-          <p class="text-(--color-text-secondary)">{assetState.error}</p>
-          <button
-            type="button"
-            class="btn btn-primary mt-4"
-            onclick={() => invalidateAll()}
+      <div class="card__body">
+        {#if assets.length === 0}
+          <div
+            id="assets-empty"
+            class="empty-state"
           >
-            {messages.BTN_RETRY}
-          </button>
-        </div>
-      {:else if filteredAssets.length === 0}
-        <div
-          id="assets-empty"
-          class="empty-state"
-        >
-          <div class="empty-state__icon"><i class="fas fa-cogs"></i></div>
-          <h3 class="empty-state__title">{emptyStateTitle}</h3>
-          <p class="empty-state__description">{emptyStateDescription}</p>
-          {#if assetState.currentStatusFilter === 'all'}
-            <button
-              type="button"
-              class="btn btn-primary"
-              onclick={openAddModal}
-            >
-              <i class="fas fa-plus"></i>
-              {messages.BTN_ADD}
-            </button>
-          {/if}
-        </div>
-      {:else}
-        <div id="assets-table-content">
-          <div class="table-responsive">
-            <table
-              class="data-table data-table--hover data-table--striped"
-              id="assets-table"
-            >
-              <thead>
-                <tr>
-                  <th scope="col">{messages.TH_ID}</th>
-                  <th scope="col">{messages.TH_NAME}</th>
-                  <th scope="col">{messages.TH_MODEL}</th>
-                  <th scope="col">{messages.TH_MANUFACTURER}</th>
-                  <th scope="col">{messages.TH_AREA}</th>
-                  <th scope="col">{messages.TH_DEPARTMENT}</th>
-                  <th scope="col">{messages.TH_TEAMS}</th>
-                  <th scope="col">{messages.TH_NEXT_ABSENCE}</th>
-                  <th scope="col">{messages.TH_ACTIONS}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each paginatedAssets as asset (asset.id)}
-                  {@const areaBadge = getAreaBadgeData(asset.areaName, labels)}
-                  {@const deptBadge = getDepartmentBadgeData(asset.departmentName, labels)}
-                  {@const teamsBadge = getTeamsBadgeData(asset.teams, labels)}
-                  <tr>
-                    <td><code class="text-muted">{asset.id}</code></td>
-                    <td><strong>{asset.name}</strong></td>
-                    <td>{asset.model ?? '-'}</td>
-                    <td>{asset.manufacturer ?? '-'}</td>
-                    <td>
-                      <span
-                        class="badge {areaBadge.class}"
-                        title={areaBadge.tooltip}
-                      >
-                        {areaBadge.text}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        class="badge {deptBadge.class}"
-                        title={deptBadge.tooltip}
-                      >
-                        {deptBadge.text}
-                      </span>
-                    </td>
-                    <td>
-                      <span
-                        class="badge {teamsBadge.class}"
-                        title={teamsBadge.tooltip}
-                      >
-                        {teamsBadge.text}
-                      </span>
-                    </td>
-                    <td>
-                      {#if asset.availabilityStatus !== undefined && asset.availabilityStatus !== 'operational' && asset.availabilityStart !== undefined}
-                        {@const statusKey = asset.availabilityStatus as AssetAvailabilityStatus}
-                        <span
-                          class="badge {MACHINE_AVAILABILITY_BADGE_CLASSES[statusKey]}"
-                          title={asset.availabilityNotes ?? ''}
-                        >
-                          {formatDate(asset.availabilityStart)}
-                          – {MACHINE_AVAILABILITY_LABELS[statusKey]}
-                        </span>
-                      {:else}
-                        <span class="text-(--color-text-tertiary)">–</span>
-                      {/if}
-                    </td>
-                    <td>
-                      <div class="flex gap-2">
-                        <button
-                          type="button"
-                          class="action-icon action-icon--info"
-                          title="Verfügbarkeit"
-                          aria-label="Verfügbarkeit bearbeiten"
-                          onclick={() => {
-                            openAvailabilityModal({
-                              name: asset.name,
-                              uuid: asset.uuid,
-                            });
-                          }}
-                        >
-                          <i class="fas fa-calendar-alt"></i>
-                        </button>
-                        <button
-                          type="button"
-                          class="action-icon action-icon--edit"
-                          title="Bearbeiten"
-                          aria-label="Bearbeiten"
-                          onclick={() => openEditModal(asset.id)}
-                        >
-                          <i class="fas fa-edit"></i>
-                        </button>
-                        <button
-                          type="button"
-                          class="action-icon action-icon--delete"
-                          title="Löschen"
-                          aria-label="Löschen"
-                          onclick={() => {
-                            assetState.openDeleteModal(asset.id);
-                          }}
-                        >
-                          <i class="fas fa-trash"></i>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
+            <div class="empty-state__icon"><i class="fas fa-cogs"></i></div>
+            <h3 class="empty-state__title">{emptyStateTitle}</h3>
+            <p class="empty-state__description">{emptyStateDescription}</p>
+            {#if statusFilter === 'all' && searchTerm === ''}
+              <button
+                type="button"
+                class="btn btn-primary"
+                onclick={openAddModal}
+              >
+                <i class="fas fa-plus"></i>
+                {messages.BTN_ADD}
+              </button>
+            {/if}
           </div>
-          {#if totalPages > 1}
-            <nav
-              class="pagination"
-              id="assets-pagination"
-            >
-              <button
-                type="button"
-                class="pagination__btn pagination__btn--prev"
-                onclick={handlePreviousPage}
-                disabled={currentPage === 1}
+        {:else}
+          <div id="assets-table-content">
+            <div class="table-responsive">
+              <table
+                class="data-table data-table--hover data-table--striped data-table--actions-hover"
+                id="assets-table"
               >
-                <i class="fas fa-chevron-left"></i> Zurück
-              </button>
-              <div class="pagination__pages">
-                {#each visiblePages as page, i (i)}
-                  {#if page.type === 'ellipsis'}
-                    <span class="pagination__ellipsis">...</span>
-                  {:else if page.type === 'page'}
-                    <button
-                      type="button"
-                      class="pagination__page"
-                      class:pagination__page--active={page.active}
-                      onclick={() => {
-                        goToPage(page.value);
-                      }}
-                    >
-                      {page.value}
-                    </button>
-                  {/if}
-                {/each}
-              </div>
-              <span class="pagination__info">
-                Seite {currentPage} von {totalPages} ({filteredAssets.length} Einträge)
-              </span>
-              <button
-                type="button"
-                class="pagination__btn pagination__btn--next"
-                onclick={handleNextPage}
-                disabled={currentPage === totalPages}
+                <thead>
+                  <tr>
+                    <th scope="col">{messages.TH_ID}</th>
+                    <th scope="col">{messages.TH_NAME}</th>
+                    <th scope="col">{messages.TH_MODEL}</th>
+                    <th scope="col">{messages.TH_MANUFACTURER}</th>
+                    <th scope="col">{messages.TH_AREA}</th>
+                    <th scope="col">{messages.TH_DEPARTMENT}</th>
+                    <th scope="col">{messages.TH_TEAMS}</th>
+                    <th scope="col">{messages.TH_NEXT_ABSENCE}</th>
+                    <th scope="col">{messages.TH_ACTIONS}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each assets as asset (asset.id)}
+                    {@const areaBadge = getAreaBadgeData(asset.areaName, labels)}
+                    {@const deptBadge = getDepartmentBadgeData(asset.departmentName, labels)}
+                    {@const teamsBadge = getTeamsBadgeData(asset.teams, labels)}
+                    <tr>
+                      <td><code class="text-muted">{asset.id}</code></td>
+                      <td><strong>{asset.name}</strong></td>
+                      <td>{asset.model ?? '-'}</td>
+                      <td>{asset.manufacturer ?? '-'}</td>
+                      <td>
+                        <span
+                          class="badge {areaBadge.class}"
+                          title={areaBadge.tooltip}
+                        >
+                          {areaBadge.text}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          class="badge {deptBadge.class}"
+                          title={deptBadge.tooltip}
+                        >
+                          {deptBadge.text}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          class="badge {teamsBadge.class}"
+                          title={teamsBadge.tooltip}
+                        >
+                          {teamsBadge.text}
+                        </span>
+                      </td>
+                      <td>
+                        {#if asset.availabilityStatus !== undefined && asset.availabilityStatus !== 'operational' && asset.availabilityStart !== undefined}
+                          {@const statusKey = asset.availabilityStatus as AssetAvailabilityStatus}
+                          <span
+                            class="badge {MACHINE_AVAILABILITY_BADGE_CLASSES[statusKey]}"
+                            title={asset.availabilityNotes ?? ''}
+                          >
+                            {formatDate(asset.availabilityStart)}
+                            – {MACHINE_AVAILABILITY_LABELS[statusKey]}
+                          </span>
+                        {:else}
+                          <span class="text-(--color-text-tertiary)">–</span>
+                        {/if}
+                      </td>
+                      <td>
+                        <div class="flex gap-2">
+                          <button
+                            type="button"
+                            class="action-icon action-icon--info"
+                            title="Verfügbarkeit"
+                            aria-label="Verfügbarkeit bearbeiten"
+                            onclick={() => {
+                              openAvailabilityModal({
+                                name: asset.name,
+                                uuid: asset.uuid,
+                              });
+                            }}
+                          >
+                            <i class="fas fa-calendar-alt"></i>
+                          </button>
+                          <button
+                            type="button"
+                            class="action-icon action-icon--edit"
+                            title="Bearbeiten"
+                            aria-label="Bearbeiten"
+                            onclick={() => openEditModal(asset.id)}
+                          >
+                            <i class="fas fa-edit"></i>
+                          </button>
+                          <button
+                            type="button"
+                            class="action-icon action-icon--delete"
+                            title="Löschen"
+                            aria-label="Löschen"
+                            onclick={() => {
+                              assetState.openDeleteModal(asset.id);
+                            }}
+                          >
+                            <i class="fas fa-trash"></i>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Pagination — URL-driven, anchor-based for native back/forward + right-click support -->
+            {#if pagination.totalPages > 1}
+              <nav
+                class="pagination"
+                id="assets-pagination"
+                aria-label="Seitennavigation"
               >
-                Weiter <i class="fas fa-chevron-right"></i>
-              </button>
-            </nav>
-          {/if}
-        </div>
-      {/if}
+                {#if pagination.hasPrev}
+                  <a
+                    class="pagination__btn pagination__btn--prev"
+                    href={pageHref(pagination.page - 1)}
+                    rel="prev"
+                  >
+                    <i class="fas fa-chevron-left"></i> Zurück
+                  </a>
+                {:else}
+                  <button
+                    type="button"
+                    class="pagination__btn pagination__btn--prev"
+                    disabled
+                  >
+                    <i class="fas fa-chevron-left"></i> Zurück
+                  </button>
+                {/if}
+
+                <div class="pagination__pages">
+                  {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
+                    {#if page === pagination.page}
+                      <span
+                        class="pagination__page pagination__page--active"
+                        aria-current="page"
+                      >
+                        {page}
+                      </span>
+                    {:else}
+                      <a
+                        class="pagination__page"
+                        href={pageHref(page)}
+                      >
+                        {page}
+                      </a>
+                    {/if}
+                  {/each}
+                </div>
+
+                <span class="pagination__info">
+                  Seite {pagination.page} von {pagination.totalPages} ({pagination.total} Einträge)
+                </span>
+
+                {#if pagination.hasNext}
+                  <a
+                    class="pagination__btn pagination__btn--next"
+                    href={pageHref(pagination.page + 1)}
+                    rel="next"
+                  >
+                    Weiter <i class="fas fa-chevron-right"></i>
+                  </a>
+                {:else}
+                  <button
+                    type="button"
+                    class="pagination__btn pagination__btn--next"
+                    disabled
+                  >
+                    Weiter <i class="fas fa-chevron-right"></i>
+                  </button>
+                {/if}
+              </nav>
+            {/if}
+          </div>
+        {/if}
+      </div>
     </div>
   </div>
-</div>
 
-<!-- Floating Action Button -->
-<button
-  type="button"
-  class="btn-float add-asset-btn"
-  onclick={openAddModal}
-  aria-label="Hinzufügen"
->
-  <i class="fas fa-plus"></i>
-</button>
+  <!-- Floating Action Button -->
+  <button
+    type="button"
+    class="btn-float add-asset-btn"
+    onclick={openAddModal}
+    aria-label="Hinzufügen"
+  >
+    <i class="fas fa-plus"></i>
+  </button>
 
-<!-- Modal Components -->
-<AssetFormModal
-  onsubmit={handleFormSubmit}
-  onclose={() => {
-    assetState.closeAssetModal();
-  }}
-/>
-<DeleteModals ondelete={deleteAsset} />
+  <!-- Modal Components -->
+  <AssetFormModal
+    onsubmit={handleFormSubmit}
+    onclose={() => {
+      assetState.closeAssetModal();
+    }}
+  />
+  <DeleteModals ondelete={deleteAsset} />
 
-<!-- Asset Availability Modal -->
-<AssetAvailabilityModal
-  show={showAvailabilityModal}
-  asset={availabilityAsset}
-  submitting={availabilitySubmitting}
-  bind:availabilityStatus
-  bind:availabilityStart
-  bind:availabilityEnd
-  bind:availabilityReason
-  bind:availabilityNotes
-  onclose={closeAvailabilityModal}
-  onsave={() => {
-    void saveAvailability();
-  }}
-  onmanage={navigateToAvailabilityHistory}
-/>
+  <!-- Asset Availability Modal -->
+  <AssetAvailabilityModal
+    show={showAvailabilityModal}
+    asset={availabilityAsset}
+    submitting={availabilitySubmitting}
+    bind:availabilityStatus
+    bind:availabilityStart
+    bind:availabilityEnd
+    bind:availabilityReason
+    bind:availabilityNotes
+    onclose={closeAvailabilityModal}
+    onsave={() => {
+      void saveAvailability();
+    }}
+    onmanage={navigateToAvailabilityHistory}
+  />
+{/if}

@@ -1,83 +1,66 @@
 // =============================================================================
-// DOCUMENTS EXPLORER - API FUNCTIONS
+// DOCUMENTS EXPLORER — MUTATION API (Phase 4.9b: fetchers removed)
 // =============================================================================
-
-import { browser } from '$app/environment';
+//
+// Pre-Phase-4.9b this file held:
+//   - `fetchDocuments` / `fetchChatFolders` / `fetchChatAttachments` —
+//     consumed by `state-data.svelte.ts:loadDocuments|...`. All three are
+//     now SSR-loaded by `+page.server.ts` via the URL contract; the legacy
+//     fetchers are dead and removed (mirrors §D14 cleanup discipline used
+//     in 4.5b/4.6/4.7b/4.8b).
+//   - `getCurrentUser()` — kept (called by upload-modal-open via
+//     `state.svelte.ts:loadCurrentUser`). Delegates to the shared user
+//     service to dedupe with `/users/me` callers app-wide.
+//
+// Mutations stay client-side (apiClient) — they trigger `invalidateAll()`
+// in `state.svelte.ts` to refresh the SSR snapshot.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.9b §D14
 
 import { getApiClient } from '$lib/utils/api-client';
-import { createLogger } from '$lib/utils/logger';
 import { fetchCurrentUser as fetchSharedUser } from '$lib/utils/user-service';
 
 import type {
-  Document,
-  ChatFolder,
-  UploadFormData,
-  UpdateDocumentData,
   ApiResponse,
   CurrentUser,
+  Document,
+  UpdateDocumentData,
+  UploadFormData,
 } from './types';
-
-const log = createLogger('DocumentsExplorerApi');
 
 const apiClient = getApiClient();
 
 // =============================================================================
-// DOCUMENT FETCHING
+// MARK AS READ
 // =============================================================================
 
 /**
- * Fetch all documents for the current user
- * Backend filters based on user permissions
- */
-export async function fetchDocuments(): Promise<Document[]> {
-  const result = await apiClient.get('/documents');
-
-  // apiClient already extracts response.data, so result is: { documents, pagination }
-  if (result !== null && typeof result === 'object' && 'documents' in result) {
-    const rawDocs = Array.isArray(result.documents) ? result.documents : [];
-    // Map API field names to our interface
-    return rawDocs.map((doc: Record<string, unknown>) => ({
-      ...doc,
-      // Map fileSize -> size
-      size: doc.fileSize ?? doc.size ?? 0,
-      // Map createdAt -> uploadedAt
-      uploadedAt: doc.createdAt ?? doc.uploadedAt ?? new Date().toISOString(),
-      // Map createdBy -> uploadedBy
-      uploadedBy: doc.createdBy ?? doc.uploadedBy ?? 0,
-    })) as Document[];
-  }
-
-  // Direct array response (legacy)
-  if (Array.isArray(result)) {
-    return result as Document[];
-  }
-
-  return [];
-}
-
-/**
- * Mark a document as read
+ * Mark a document as read. The pre-4.9b version was paired with an
+ * optimistic in-memory `allDocuments` mutation — post-4.9b the caller
+ * (`state.svelte.ts:markAsRead`) follows up with `invalidateAll()` so the
+ * `isRead` flip arrives via the next SSR snapshot.
  */
 export async function markDocumentAsRead(documentId: number): Promise<void> {
   await apiClient.post(`/documents/${documentId}/read`, {});
 }
 
-/**
- * Delete a document (soft delete)
- */
+// =============================================================================
+// DELETE / UPDATE
+// =============================================================================
+
 export async function deleteDocument(documentId: number): Promise<void> {
   await apiClient.delete(`/documents/${documentId}`);
 }
 
 /**
- * Update a document (name, category, tags)
- * Backend uses PUT and expects 'filename' field
+ * Update a document (filename / category / tags). Backend uses PUT and
+ * expects `filename` (NOT `documentName` — the FE-facing form field name);
+ * the field-mapping below is the long-standing FE↔BE adapter.
  */
 export async function updateDocument(
   documentId: number,
   data: UpdateDocumentData,
 ): Promise<Document> {
-  // Map frontend field names to backend field names
   const backendData: Record<string, unknown> = {};
   if (data.documentName !== undefined) {
     backendData.filename = data.documentName;
@@ -91,7 +74,7 @@ export async function updateDocument(
 
   const result = await apiClient.put(`/documents/${documentId}`, backendData);
 
-  // Handle different response formats from API
+  // Tolerant unwrap — backend has historically used multiple shapes here.
   if (result !== null && typeof result === 'object') {
     const obj = result as Record<string, unknown>;
     if ('id' in obj) {
@@ -106,130 +89,21 @@ export async function updateDocument(
 }
 
 // =============================================================================
-// CHAT FOLDERS
+// UPLOAD
 // =============================================================================
 
 /**
- * Fetch chat folders (conversations with attachments)
- * Uses documents endpoint, not chat endpoint!
+ * Build the multipart payload for `/documents` POST. Backend expects
+ * `document` (singular) as the file field — see `documents.controller.ts`
+ * `@UploadedFile()` decorator (ADR-042 multipart pipeline).
  */
-export async function fetchChatFolders(): Promise<ChatFolder[]> {
-  try {
-    const result = await apiClient.get('/documents/chat-folders');
-
-    // Handle different response formats
-    if (Array.isArray(result)) {
-      return result as ChatFolder[];
-    }
-    if (result !== null && typeof result === 'object') {
-      const obj = result as Record<string, unknown>;
-      if ('folders' in obj && Array.isArray(obj.folders)) {
-        return obj.folders as ChatFolder[];
-      }
-      if ('data' in obj && Array.isArray(obj.data)) {
-        return obj.data as ChatFolder[];
-      }
-    }
-    return [];
-  } catch (err: unknown) {
-    log.error({ err }, 'Failed to fetch chat folders');
-    return [];
-  }
-}
-
-/**
- * Fetch chat attachments for a specific conversation
- */
-/** Map raw API document to frontend Document type */
-function mapApiDocument(doc: Record<string, unknown>): Document {
-  // Extract values with proper null checks before type casting
-  const fileSize = doc.fileSize as number | undefined;
-  const size = doc.size as number | undefined;
-  const createdAt = doc.createdAt as string | undefined;
-  const uploadedAt = doc.uploadedAt as string | undefined;
-  const createdBy = doc.createdBy as number | undefined;
-  const uploadedBy = doc.uploadedBy as number | undefined;
-
-  return {
-    ...doc,
-    size: fileSize ?? size ?? 0,
-    uploadedAt: createdAt ?? uploadedAt ?? new Date().toISOString(),
-    uploadedBy: createdBy ?? uploadedBy ?? 0,
-  } as Document;
-}
-
-/** Type guard: check if value is a non-null object */
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** Extract documents array from object with 'documents' key */
-function extractFromDocumentsKey(obj: Record<string, unknown>): Record<string, unknown>[] | null {
-  if ('documents' in obj && Array.isArray(obj.documents)) {
-    return obj.documents as Record<string, unknown>[];
-  }
-  return null;
-}
-
-/** Extract documents array from object with 'data' key */
-function extractFromDataKey(obj: Record<string, unknown>): Record<string, unknown>[] | null {
-  if (!('data' in obj)) return null;
-
-  // { data: [...] }
-  if (Array.isArray(obj.data)) {
-    return obj.data as Record<string, unknown>[];
-  }
-
-  // { data: { documents: [...] } }
-  if (isObject(obj.data)) {
-    return extractFromDocumentsKey(obj.data);
-  }
-
-  return null;
-}
-
-/**
- * Extract documents array from various API response structures
- * Handles: [...], { documents: [...] }, { data: { documents: [...] } }, { data: [...] }
- */
-function extractDocumentsFromResponse(result: unknown): Record<string, unknown>[] {
-  if (Array.isArray(result)) {
-    return result as Record<string, unknown>[];
-  }
-
-  if (!isObject(result)) {
-    return [];
-  }
-
-  return extractFromDocumentsKey(result) ?? extractFromDataKey(result) ?? [];
-}
-
-export async function fetchChatAttachments(conversationId: number): Promise<Document[]> {
-  try {
-    const result = await apiClient.get(`/chat/conversations/${conversationId}/attachments`);
-    const rawDocs = extractDocumentsFromResponse(result);
-    return rawDocs.map(mapApiDocument);
-  } catch (err: unknown) {
-    log.error({ err }, 'Failed to fetch chat attachments');
-    return [];
-  }
-}
-
-// =============================================================================
-// DOCUMENT UPLOAD
-// =============================================================================
-
-/**
- * Build FormData for document upload
- * Backend expects 'document' field name (upload.single('document'))
- */
-function buildUploadFormData(formData: UploadFormData): FormData {
+function buildUploadPayload(formData: UploadFormData): FormData {
   const data = new FormData();
   data.append('document', formData.file);
   data.append('accessScope', formData.accessScope);
   data.append('category', formData.category);
 
-  // Optional fields - append if defined
+  // Optional fields — append only if defined (backend tolerates absence).
   const optionalFields: [string, string | number | undefined | null][] = [
     ['documentName', formData.documentName],
     ['description', formData.description],
@@ -246,7 +120,6 @@ function buildUploadFormData(formData: UploadFormData): FormData {
     }
   }
 
-  // Tags need JSON serialization
   if (formData.tags !== undefined && formData.tags.length > 0) {
     data.append('tags', JSON.stringify(formData.tags));
   }
@@ -254,13 +127,26 @@ function buildUploadFormData(formData: UploadFormData): FormData {
   return data;
 }
 
-/** Upload a document */
+/**
+ * Upload a document.
+ *
+ * Uses XMLHttpRequest (not `fetch`) because the upload progress event is
+ * the simplest way to drive the frontend progress bar — `fetch` upload
+ * progress requires the (still-uncoupled) Streams API and a request body
+ * stream, which is not worth the complexity here.
+ *
+ * Auth: `withCredentials = true` ensures the HttpOnly `accessToken` cookie
+ * (ADR-046 §"3-cookie invariant") is sent with the upload, mirroring
+ * `apiClient`'s `credentials: 'include'`. Same-origin browsers send cookies
+ * even without this flag, but setting it explicitly future-proofs against
+ * cross-origin deployment (e.g. CDN-hosted frontend) and matches the rest
+ * of the codebase.
+ */
 export async function uploadDocument(
   formData: UploadFormData,
   onProgress?: (progress: number) => void,
 ): Promise<Document> {
-  const data = buildUploadFormData(formData);
-  const token = browser ? localStorage.getItem('accessToken') : null;
+  const data = buildUploadPayload(formData);
   const xhr = new XMLHttpRequest();
 
   return await new Promise((resolve, reject) => {
@@ -288,10 +174,7 @@ export async function uploadDocument(
     });
 
     xhr.open('POST', '/api/v2/documents');
-
-    if (token !== null) {
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-    }
+    xhr.withCredentials = true;
     xhr.send(data);
   });
 }
@@ -301,8 +184,8 @@ export async function uploadDocument(
 // =============================================================================
 
 /**
- * Get current user info
- * DELEGATES to shared user service (prevents duplicate /users/me calls)
+ * Get current user info — delegates to the shared user service (prevents
+ * duplicate `/users/me` calls from independent module-singletons).
  */
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const result = await fetchSharedUser();

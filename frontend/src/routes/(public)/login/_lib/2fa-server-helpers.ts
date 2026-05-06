@@ -28,6 +28,11 @@ import { setAuthCookies } from '$lib/server/auth-cookies';
 // setting cookies on the wrong origin. We use the same URL builder as the
 // pre-2FA OAuth-bypass code path in `+page.server.ts`.
 import { buildSubdomainHandoffUrl } from '$lib/server/handoff-url';
+// ADR-050 followup 2026-05-05: apex remember-last-tenant hint. Set in the
+// handoff branch (when verify ran on apex) so the next apex `/login` visit
+// auto-redirects back to this tenant subdomain instead of demanding a
+// second login. See helper file header for threat model — this is NOT auth.
+import { setLastTenantSlugIfApex } from '$lib/server/last-tenant-cookie';
 import { resilientFetch } from '$lib/server/resilient-fetch';
 import { createLogger } from '$lib/utils/logger';
 
@@ -372,6 +377,8 @@ function applyHandoffSuccess(
   verified: Extract<VerifySuccessResult, { kind: 'handoff' }>,
   cookies: RequestEvent['cookies'],
   request: Request,
+  url: URL,
+  hostSlug: string | null,
 ): VerifyHandoffResult {
   // Single-use challenge cookie — already consumed server-side by the
   // backend's `reply.clearCookie('challengeToken')` (see
@@ -379,6 +386,13 @@ function applyHandoffSuccess(
   // here too; mirror that for symmetry so a stale cookie from a partial
   // response can't survive (defence-in-depth, free of cost).
   cookies.delete('challengeToken', { path: '/' });
+
+  // ADR-050 followup 2026-05-05: apex remember-last-tenant hint. Helper
+  // gates on `hostSlug === null` so this is a no-op on foreign subdomains
+  // (where the cookie API is scoped to a host that future apex visits can
+  // never read). See `last-tenant-cookie.ts::setLastTenantSlugIfApex`.
+  setLastTenantSlugIfApex(cookies, url, hostSlug, verified.handoff.subdomain);
+
   return {
     success: true,
     redirectTo: buildSubdomainHandoffUrl(
@@ -425,7 +439,7 @@ function applyHandoffSuccess(
 export async function handleVerifyAction(
   event: RequestEvent,
 ): Promise<ActionFailure<VerifyActionFailureData> | VerifyHandoffResult> {
-  const { request, cookies, url } = event;
+  const { request, cookies, url, locals } = event;
   const formData = await request.formData();
 
   const parsed = parseCodeField(formData.get('code'));
@@ -473,7 +487,7 @@ export async function handleVerifyAction(
     if (isActionFailure<VerifyActionFailureData>(verified)) return verified;
 
     if (verified.kind === 'handoff') {
-      return applyHandoffSuccess(verified, cookies, request);
+      return applyHandoffSuccess(verified, cookies, request, url, locals.hostSlug);
     }
 
     // Same-origin: write cookies on this origin + redirect to dashboard.

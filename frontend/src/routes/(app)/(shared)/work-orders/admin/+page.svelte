@@ -3,22 +3,31 @@
    * Work Orders (Admin) — Alle Aufträge
    * @module shared/work-orders/admin/+page
    *
-   * Level 3 SSR: Stats cards, filter bar, data table, FAB, modals.
-   * Role guard in +page.server.ts (admin/root only).
+   * Phase 4.7b (2026-05-06): URL-state-driven pagination. Filter / page / search
+   * interactions map to `goto()`. Mutations (create, edit, archive, restore,
+   * assign) call `invalidateAll()` after success — SvelteKit re-runs the load
+   * on the SAME URL so the user stays on the page they were viewing.
+   *
+   * Adds the search input (was missing pre-Phase-4.7b — backend has supported
+   * `?search=` since changelog 1.2.0).
+   *
+   * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Per-Page Definition of Done"
    */
+  import { goto, invalidateAll } from '$app/navigation';
+  import { resolve } from '$app/paths';
+
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
   import { showSuccessAlert, showErrorAlert } from '$lib/stores/toast';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   import ConfirmModal from '$design-system/components/confirm-modal/ConfirmModal.svelte';
 
   import {
-    fetchWorkOrders,
     createWorkOrder,
     updateWorkOrder,
     archiveWorkOrder,
     restoreWorkOrder,
     assignUsers,
-    fetchStats,
     uploadPhoto,
     logApiError,
   } from '../_lib/api';
@@ -31,34 +40,91 @@
   import type { PageData } from './$types';
   import type {
     CreateWorkOrderPayload,
-    PaginatedResponse,
     UpdateWorkOrderPayload,
     WorkOrderListItem,
-    WorkOrderStats,
   } from '../_lib/types';
 
   // =============================================================================
-  // SSR DATA
+  // SSR DATA — single source of truth, no `$state` shadows of the list
   // =============================================================================
 
   const { data }: { data: PageData } = $props();
 
   const permissionDenied = $derived(data.permissionDenied);
+  const workOrders = $derived(data.workOrders);
+  const pagination = $derived(data.pagination);
+  const stats = $derived(data.stats);
+  const eligibleUsers = $derived(data.eligibleUsers);
+  const urlState = $derived(data.urlState);
+  const hasWorkOrders = $derived(workOrders.length > 0);
 
   // =============================================================================
-  // CLIENT STATE
+  // URL NAVIGATION — every interaction maps to goto()
   // =============================================================================
 
-  let clientWorkOrders = $state<PaginatedResponse<WorkOrderListItem> | null>(null);
-  let clientStats = $state<WorkOrderStats | null>(null);
-  let statusFilter = $state('');
-  let priorityFilter = $state('');
-  let isActiveFilter = $state('active');
-  let overdueFilter = $state(false);
-  let currentPage = $state(1);
-  let loading = $state(false);
+  const BASE_PATH = '/work-orders/admin';
 
-  // Modal state
+  function navigate(updates: Record<string, string>): void {
+    const next: Record<string, unknown> = {
+      page: 1,
+      search: urlState.search,
+      status: urlState.status,
+      priority: urlState.priority,
+      isActive: urlState.isActive === 'active' ? '' : urlState.isActive,
+      overdue: urlState.overdue ? 'true' : '',
+      ...updates,
+    };
+    void goto(resolve(buildPaginatedHref(BASE_PATH, next)), {
+      keepFocus: true,
+      noScroll: true,
+    });
+  }
+
+  function pageHref(page: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page,
+        search: urlState.search,
+        status: urlState.status,
+        priority: urlState.priority,
+        isActive: urlState.isActive === 'active' ? '' : urlState.isActive,
+        overdue: urlState.overdue ? 'true' : '',
+      }),
+    );
+  }
+
+  // =============================================================================
+  // SEARCH INPUT — debounced URL update (Beta-correctness gap closure)
+  // =============================================================================
+
+  // Writable $derived (Svelte 5.21+) — re-derives from URL state on navigation,
+  // can be locally reassigned during typing. The debounced navigate() call
+  // updates the URL; on the next load() roundtrip, urlState.search matches the
+  // typed value and the derivation is a no-op. Replaces the $state + $effect
+  // mirror pattern (svelte/prefer-writable-derived).
+  let searchInput = $derived(urlState.search);
+
+  let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  function handleSearchInput(event: Event): void {
+    const target = event.target as HTMLInputElement;
+    searchInput = target.value;
+    if (searchDebounce !== null) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      navigate({ search: searchInput.trim() });
+    }, 300);
+  }
+
+  function handleSearchSubmit(event: SubmitEvent): void {
+    event.preventDefault();
+    if (searchDebounce !== null) clearTimeout(searchDebounce);
+    navigate({ search: searchInput.trim() });
+  }
+
+  // =============================================================================
+  // MODAL STATE
+  // =============================================================================
+
   let showEditModal = $state(false);
   let showAssignModal = $state(false);
   let showArchiveConfirm = $state(false);
@@ -67,86 +133,6 @@
   let archivingItem = $state<WorkOrderListItem | null>(null);
   let submitting = $state(false);
   let pendingFiles = $state<File[] | null>(null);
-
-  // =============================================================================
-  // DERIVED
-  // =============================================================================
-
-  const workOrders = $derived(clientWorkOrders ?? data.workOrders);
-  const stats = $derived(clientStats ?? data.stats);
-  const eligibleUsers = $derived(data.eligibleUsers);
-  const totalPages = $derived(Math.max(1, Math.ceil(workOrders.total / workOrders.pageSize)));
-  const hasWorkOrders = $derived(workOrders.items.length > 0);
-
-  // =============================================================================
-  // DATA LOADING
-  // =============================================================================
-
-  async function loadWorkOrders(): Promise<void> {
-    loading = true;
-    try {
-      const filters: {
-        status?: string;
-        priority?: string;
-        isActive?: string;
-        overdue?: string;
-      } = {};
-      if (statusFilter !== '') filters.status = statusFilter;
-      if (priorityFilter !== '') filters.priority = priorityFilter;
-      if (isActiveFilter !== 'active') filters.isActive = isActiveFilter;
-      if (overdueFilter) filters.overdue = 'true';
-      clientWorkOrders = await fetchWorkOrders(currentPage, 20, filters);
-    } catch (err: unknown) {
-      logApiError('loadWorkOrders', err);
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function refreshStats(): Promise<void> {
-    try {
-      clientStats = await fetchStats();
-    } catch (err: unknown) {
-      logApiError('fetchStats', err);
-    }
-  }
-
-  async function refreshAll(): Promise<void> {
-    await Promise.all([loadWorkOrders(), refreshStats()]);
-  }
-
-  function handleStatusFilterChange(value: string): void {
-    statusFilter = value;
-    currentPage = 1;
-    void loadWorkOrders();
-  }
-
-  function handlePriorityFilterChange(value: string): void {
-    priorityFilter = value;
-    currentPage = 1;
-    void loadWorkOrders();
-  }
-
-  function handleOverdueFilterToggle(): void {
-    overdueFilter = !overdueFilter;
-    currentPage = 1;
-    void loadWorkOrders();
-  }
-
-  function handleIsActiveFilterChange(value: string): void {
-    isActiveFilter = value;
-    currentPage = 1;
-    void loadWorkOrders();
-  }
-
-  function handlePageChange(page: number): void {
-    currentPage = page;
-    void loadWorkOrders();
-  }
-
-  // =============================================================================
-  // MODAL HANDLERS
-  // =============================================================================
 
   function openCreateModal(): void {
     editingItem = null;
@@ -178,9 +164,13 @@
     pendingFiles = null;
   }
 
+  // =============================================================================
+  // MUTATION HANDLERS — all end with invalidateAll() to re-run the SSR load
+  // on the SAME URL (preserves page/filter/search position).
+  // =============================================================================
+
   async function uploadPendingFiles(woUuid: string): Promise<void> {
     if (pendingFiles === null || pendingFiles.length === 0) return;
-
     for (const file of pendingFiles) {
       try {
         await uploadPhoto(woUuid, file);
@@ -197,7 +187,6 @@
     submitting = true;
     try {
       let woUuid: string;
-
       if (editingItem !== null) {
         await updateWorkOrder(editingItem.uuid, payload);
         woUuid = editingItem.uuid;
@@ -207,10 +196,9 @@
         woUuid = created.uuid;
         showSuccessAlert(MESSAGES.SUCCESS_CREATED);
       }
-
       await uploadPendingFiles(woUuid);
       closeAllModals();
-      await refreshAll();
+      await invalidateAll();
     } catch (err: unknown) {
       logApiError('saveWorkOrder', err);
       showErrorAlert(editingItem !== null ? MESSAGES.ERROR_UPDATE : MESSAGES.ERROR_CREATE);
@@ -226,7 +214,7 @@
       await assignUsers(assigningItem.uuid, { userUuids });
       showSuccessAlert(MESSAGES.ASSIGNEES_SUCCESS_ADD);
       closeAllModals();
-      await refreshAll();
+      await invalidateAll();
     } catch (err: unknown) {
       logApiError('assignUsers', err);
       showErrorAlert(MESSAGES.ASSIGNEES_ERROR_ADD);
@@ -242,7 +230,7 @@
       await archiveWorkOrder(archivingItem.uuid);
       showSuccessAlert(MESSAGES.ARCHIVE_SUCCESS);
       closeAllModals();
-      await refreshAll();
+      await invalidateAll();
     } catch (err: unknown) {
       logApiError('archiveWorkOrder', err);
       showErrorAlert(MESSAGES.ARCHIVE_ERROR);
@@ -256,7 +244,7 @@
     try {
       await restoreWorkOrder(item.uuid);
       showSuccessAlert(MESSAGES.RESTORE_SUCCESS);
-      await refreshAll();
+      await invalidateAll();
     } catch (err: unknown) {
       logApiError('restoreWorkOrder', err);
       showErrorAlert(MESSAGES.RESTORE_ERROR);
@@ -324,14 +312,40 @@
     <div class="card">
       <div class="card__header">
         <div class="filter-bar">
+          <!-- Search input (Phase 4.7b: backend has supported ?search= since 1.2.0) -->
+          <form
+            class="search-form"
+            onsubmit={handleSearchSubmit}
+            role="search"
+          >
+            <label
+              class="search-input"
+              for="work-orders-search-admin"
+            >
+              <i
+                class="fas fa-search search-input__icon"
+                aria-hidden="true"
+              ></i>
+              <input
+                id="work-orders-search-admin"
+                type="search"
+                class="search-input__field"
+                placeholder="Auftrag suchen ..."
+                value={searchInput}
+                oninput={handleSearchInput}
+                aria-label="Arbeitsaufträge durchsuchen"
+              />
+            </label>
+          </form>
+
           <!-- Is-Active toggle (Aktive / Archiviert / Alle) -->
           <div class="toggle-group">
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={isActiveFilter === 'active'}
+              class:active={urlState.isActive === 'active'}
               onclick={() => {
-                handleIsActiveFilterChange('active');
+                navigate({ isActive: '' });
               }}
             >
               <i class="fas fa-clipboard-check"></i>
@@ -340,9 +354,9 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={isActiveFilter === 'archived'}
+              class:active={urlState.isActive === 'archived'}
               onclick={() => {
-                handleIsActiveFilterChange('archived');
+                navigate({ isActive: 'archived' });
               }}
             >
               <i class="fas fa-archive"></i>
@@ -351,9 +365,9 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={isActiveFilter === 'all'}
+              class:active={urlState.isActive === 'all'}
               onclick={() => {
-                handleIsActiveFilterChange('all');
+                navigate({ isActive: 'all' });
               }}
             >
               <i class="fas fa-list"></i>
@@ -367,9 +381,9 @@
               <button
                 type="button"
                 class="toggle-group__btn"
-                class:active={statusFilter === opt.value}
+                class:active={urlState.status === opt.value}
                 onclick={() => {
-                  handleStatusFilterChange(opt.value);
+                  navigate({ status: opt.value });
                 }}
               >
                 {opt.label}
@@ -383,9 +397,9 @@
               <button
                 type="button"
                 class="toggle-group__btn"
-                class:active={priorityFilter === opt.value}
+                class:active={urlState.priority === opt.value}
                 onclick={() => {
-                  handlePriorityFilterChange(opt.value);
+                  navigate({ priority: opt.value });
                 }}
               >
                 {opt.label}
@@ -398,9 +412,11 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={overdueFilter}
-              onclick={handleOverdueFilterToggle}
-              aria-pressed={overdueFilter}
+              class:active={urlState.overdue}
+              onclick={() => {
+                navigate({ overdue: urlState.overdue ? '' : 'true' });
+              }}
+              aria-pressed={urlState.overdue}
             >
               <i class="fas fa-exclamation-triangle"></i>
               {MESSAGES.STAT_OVERDUE}
@@ -410,14 +426,7 @@
       </div>
 
       <div class="card__body">
-        {#if loading}
-          <div class="empty-state empty-state--in-card">
-            <div class="empty-state__icon">
-              <i class="fas fa-spinner fa-spin"></i>
-            </div>
-            <p class="empty-state__description">{MESSAGES.LOADING}</p>
-          </div>
-        {:else if !hasWorkOrders}
+        {#if !hasWorkOrders}
           <div class="empty-state empty-state--in-card">
             <div class="empty-state__icon">
               <i class="fas fa-clipboard-check"></i>
@@ -429,61 +438,77 @@
           </div>
         {:else}
           <AdminWorkOrderTable
-            items={workOrders.items}
+            items={workOrders}
             onedit={openEditModal}
             onarchive={openArchiveConfirm}
             onrestore={handleRestore}
             onassign={openAssignModal}
           />
 
-          <!-- Pagination -->
-          {#if totalPages > 1}
+          <!-- Pagination — anchor links per Per-Page DoD §4 -->
+          {#if pagination.totalPages > 1}
             <nav
               class="pagination mt-6"
               aria-label="Seitennavigation"
             >
-              <button
-                type="button"
-                class="pagination__btn pagination__btn--prev"
-                disabled={currentPage <= 1}
-                onclick={() => {
-                  handlePageChange(currentPage - 1);
-                }}
-              >
-                <i class="fas fa-chevron-left"></i>
-                Zurück
-              </button>
+              {#if pagination.hasPrev}
+                <a
+                  href={pageHref(pagination.page - 1)}
+                  class="pagination__btn pagination__btn--prev"
+                  rel="prev"
+                >
+                  <i class="fas fa-chevron-left"></i>
+                  Zurück
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--prev"
+                  disabled
+                >
+                  <i class="fas fa-chevron-left"></i>
+                  Zurück
+                </button>
+              {/if}
+
               <div class="pagination__pages">
-                {#each Array.from({ length: totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
-                  <button
-                    type="button"
+                {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
+                  <a
+                    href={pageHref(page)}
                     class="pagination__page"
-                    class:pagination__page--active={page === currentPage}
-                    onclick={() => {
-                      handlePageChange(page);
-                    }}
+                    class:pagination__page--active={page === pagination.page}
+                    aria-current={page === pagination.page ? 'page' : undefined}
                   >
                     {page}
-                  </button>
+                  </a>
                 {/each}
               </div>
-              <button
-                type="button"
-                class="pagination__btn pagination__btn--next"
-                disabled={currentPage >= totalPages}
-                onclick={() => {
-                  handlePageChange(currentPage + 1);
-                }}
-              >
-                Weiter
-                <i class="fas fa-chevron-right"></i>
-              </button>
+
+              {#if pagination.hasNext}
+                <a
+                  href={pageHref(pagination.page + 1)}
+                  class="pagination__btn pagination__btn--next"
+                  rel="next"
+                >
+                  Weiter
+                  <i class="fas fa-chevron-right"></i>
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--next"
+                  disabled
+                >
+                  Weiter
+                  <i class="fas fa-chevron-right"></i>
+                </button>
+              {/if}
             </nav>
             <span class="pagination__info mt-2">
               {MESSAGES.PAGINATION_SHOWING}
-              {workOrders.items.length}
+              {workOrders.length}
               {MESSAGES.PAGINATION_OF}
-              {workOrders.total}
+              {pagination.total}
               {MESSAGES.PAGINATION_ENTRIES}
             </span>
           {/if}
@@ -571,5 +596,12 @@
     display: flex;
     gap: 1rem;
     flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .search-form {
+    flex: 1 1 240px;
+    min-width: 200px;
+    max-width: 360px;
   }
 </style>

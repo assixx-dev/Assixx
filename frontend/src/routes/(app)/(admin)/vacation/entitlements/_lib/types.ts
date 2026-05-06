@@ -61,7 +61,24 @@ export interface AddDaysPayload {
 
 // ─── SSR page data ──────────────────────────────────────────────────
 
+/**
+ * Pagination block (mirrors `PaginationMeta` from `$lib/server/api-fetch.ts`).
+ * Inlined here so this file stays the single source of truth for the page
+ * contract — same convention as `manage-employees/_lib/types.ts` post-§4.1b.
+ */
+export interface VacationEntitlementsPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
 export interface VacationEntitlementsPageData {
+  permissionDenied: boolean;
   employees: EmployeeListItem[];
+  pagination: VacationEntitlementsPagination;
+  search: string;
   currentYear: number;
 }

@@ -9,4 +9,5 @@ export { DeleteTeamQueryDto, DeleteTeamQuerySchema } from './delete-team.dto.js'
 export { AddMemberDto, AddMemberSchema } from './add-member.dto.js';
 export { AddAssetDto, AddAssetSchema } from './add-asset.dto.js';
 export { TeamMembersQueryDto, TeamMembersQuerySchema } from './team-members-query.dto.js';
-export { AssignHallsToTeamDto, AssignHallsToTeamSchema } from './assign-halls.dto.js';
+// AssignHallsToTeamDto removed: teams now inherit hall from department
+// (see migration 20260505221345432_simplify-department-hall-1to1).

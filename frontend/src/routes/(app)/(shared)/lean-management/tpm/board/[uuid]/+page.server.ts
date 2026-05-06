@@ -2,10 +2,16 @@
  * TPM Kamishibai Board — Server-Side Data Loading
  * Loads plan + all cards + colors in parallel.
  * [uuid] = plan UUID (linked from employee asset overview)
+ *
+ * Phase 4.11b (2026-05-06): switched cards fetch to `apiFetchPaginated` after
+ * 4.11a backend envelope rebuild. The legacy `extractCards` shim broke when
+ * the canonical envelope lifted the array to the top of `extractResponseData`.
+ * Pagination metadata discarded — board is a visual swim-lane, not a list view;
+ * limit=200 is a visual ceiling recorded in Known Limitation #13.
  */
 import { redirect } from '@sveltejs/kit';
 
-import { apiFetch, apiFetchWithPermission } from '$lib/server/api-fetch';
+import { apiFetch, apiFetchPaginated, apiFetchWithPermission } from '$lib/server/api-fetch';
 import { requireAddon } from '$lib/utils/addon-guard';
 import { buildLoginUrl } from '$lib/utils/build-apex-url';
 
@@ -18,18 +24,10 @@ import type {
   CategoryColorConfigEntry,
 } from '../../_lib/types';
 
-function extractCards(raw: unknown): TpmCard[] {
-  if (raw === null || typeof raw !== 'object') return [];
-  const obj = raw as Record<string, unknown>;
-  if (Array.isArray(obj.data)) return obj.data as TpmCard[];
-  if (Array.isArray(obj.items)) return obj.items as TpmCard[];
-  return [];
-}
-
 async function fetchBoardData(token: string, fetchFn: typeof fetch, planUuid: string) {
   return await Promise.all([
     apiFetchWithPermission<TpmPlan>(`/tpm/plans/${planUuid}`, token, fetchFn),
-    apiFetch<unknown>(`/tpm/plans/${planUuid}/board?page=1&limit=200`, token, fetchFn),
+    apiFetchPaginated<TpmCard>(`/tpm/plans/${planUuid}/board?page=1&limit=200`, token, fetchFn),
     apiFetch<TpmColorConfigEntry[]>('/tpm/config/colors', token, fetchFn),
     apiFetch<IntervalColorConfigEntry[]>('/tpm/config/interval-colors', token, fetchFn),
     apiFetch<CategoryColorConfigEntry[]>('/tpm/config/category-colors', token, fetchFn),
@@ -58,7 +56,7 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, params, url
   requireAddon(parentData.activeAddons, 'tpm');
 
   const { uuid: planUuid } = params;
-  const [planResult, boardRaw, colorsData, intervalColorsData, categoryColorsData] =
+  const [planResult, boardResult, colorsData, intervalColorsData, categoryColorsData] =
     await fetchBoardData(token, fetch, planUuid);
 
   if (planResult.permissionDenied) {
@@ -69,7 +67,7 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, params, url
     permissionDenied: false as const,
     planUuid,
     plan: planResult.data,
-    cards: extractCards(boardRaw),
+    cards: boardResult.data,
     colors: Array.isArray(colorsData) ? colorsData : [],
     intervalColors: Array.isArray(intervalColorsData) ? intervalColorsData : [],
     categoryColors: Array.isArray(categoryColorsData) ? categoryColorsData : [],

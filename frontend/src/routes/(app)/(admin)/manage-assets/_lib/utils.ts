@@ -6,14 +6,7 @@ import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hiera
 
 import { MACHINE_TYPE_LABELS, MESSAGES, type AssetMessages } from './constants';
 
-import type {
-  Asset,
-  AssetFormData,
-  AssetStatus,
-  AssetStatusFilter,
-  AssetTeamInfo,
-  PaginationPageItem,
-} from './types';
+import type { Asset, AssetFormData, AssetStatus, AssetStatusFilter, AssetTeamInfo } from './types';
 
 // =============================================================================
 // BADGE DATA TYPES
@@ -135,7 +128,10 @@ function formatDateForInput(dateString?: string): string {
 // =============================================================================
 
 /**
- * Get empty state title based on filter
+ * Get empty state title based on filter.
+ *
+ * Phase 4.4b: `'cleaning'` and `'other'` removed (FE/BE drift); the
+ * canonical end-of-life status `'decommissioned'` was added.
  */
 export function getEmptyStateTitle(
   statusFilter: AssetStatusFilter,
@@ -150,10 +146,8 @@ export function getEmptyStateTitle(
       return msgs.EMPTY_REPAIR;
     case 'standby':
       return msgs.EMPTY_STANDBY;
-    case 'cleaning':
-      return msgs.EMPTY_CLEANING;
-    case 'other':
-      return msgs.EMPTY_OTHER;
+    case 'decommissioned':
+      return msgs.EMPTY_DECOMMISSIONED;
     default:
       return msgs.EMPTY_TITLE;
   }
@@ -244,50 +238,10 @@ export function populateFormFromAsset(asset: Asset): FormState {
   };
 }
 
-// =============================================================================
-// PAGINATION
-// =============================================================================
-
-/**
- * Page size for client-side pagination of assets.
- * 25 = same value as manage-admins / manage-employees / manage-root (consistency).
- * Backend cap is 100 (PaginationSchema.max in common.schema.ts).
- */
-export const ASSETS_PER_PAGE = 25;
-
-/**
- * Compute visible page-button slots with ellipsis gaps.
- *
- * Window of 5 pages around the current page; 1:1 copy of the helper used by
- * manage-admins / manage-employees / manage-root / /logs so the design-system
- * pagination markup stays identical across the app.
- *
- * @see frontend/src/design-system/primitives/navigation/pagination.css
- */
-export function getVisiblePages(currentPage: number, totalPages: number): PaginationPageItem[] {
-  const pages: PaginationPageItem[] = [];
-
-  let startPage = Math.max(1, currentPage - 2);
-  const endPage = Math.min(totalPages, startPage + 4);
-  startPage = Math.max(1, endPage - 4);
-
-  if (startPage > 1) {
-    pages.push({ type: 'page', value: 1 });
-    if (startPage > 2) {
-      pages.push({ type: 'ellipsis' });
-    }
-  }
-
-  for (let i = startPage; i <= endPage; i++) {
-    pages.push({ type: 'page', value: i, active: i === currentPage });
-  }
-
-  if (endPage < totalPages) {
-    if (endPage < totalPages - 1) {
-      pages.push({ type: 'ellipsis' });
-    }
-    pages.push({ type: 'page', value: totalPages });
-  }
-
-  return pages;
-}
+// Phase 4.4b (2026-05-05): `ASSETS_PER_PAGE` (was 25) and `getVisiblePages`
+// (ellipsis page-button window helper) were removed. Server-driven
+// pagination puts the page size in `+page.server.ts` (`PAGE_SIZE = 25`)
+// and renders one anchor per page via `Array.from({length: totalPages})`
+// in `+page.svelte` — same shape as the §4.1b `manage-employees`
+// reference impl. See `_lib/types.ts` `PaginationPageItem` removal note
+// for the windowing rationale.

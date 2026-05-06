@@ -159,7 +159,7 @@ Assixx had **no automated tests** until early 2026. API endpoints were manually 
 
 | Aspect    | Decision                                                                     |
 | --------- | ---------------------------------------------------------------------------- |
-| Tool      | Vitest v4.1 (`vitest run --project unit`)                                    |
+| Tool      | Vitest (`vitest run --project unit`)                                         |
 | Scope     | `backend/src/**/*.test.ts` + `shared/src/**/*.test.ts`                       |
 | Execution | Parallel, isolated, <1s total duration                                       |
 | Mocking   | `vi.mock()` for DB services (Phase 5+), `vi.useFakeTimers()` for dates       |
@@ -200,7 +200,7 @@ Phase 11: Org Scope + Hierarchy  — scope, hierarchy-permission, leads   ✅ ~1
 
 | Aspect        | Decision                                                   |
 | ------------- | ---------------------------------------------------------- |
-| Tool          | Vitest v4.1 (`vitest run --project api`)                   |
+| Tool          | Vitest (`vitest run --project api`)                        |
 | Scope         | `backend/test/**/*.api.test.ts`                            |
 | Execution     | Sequential (`maxWorkers: 1`, `isolate: false`)             |
 | HTTP Client   | Native `fetch()` — no abstraction (no Supertest, no Axios) |
@@ -384,7 +384,7 @@ export default defineConfig({
 
 | Aspect        | Decision                                                         |
 | ------------- | ---------------------------------------------------------------- |
-| Tool          | Playwright 1.59 (`pnpm run test:e2e`)                            |
+| Tool          | Playwright (`pnpm run test:e2e`)                                 |
 | Scope         | `e2e/*.spec.ts`                                                  |
 | Browser       | Chromium (Desktop Chrome device profile)                         |
 | Execution     | Sequential (`workers: 1`), headless                              |
@@ -434,7 +434,7 @@ behaviour.
 | Auth          | `loginApitest()` in `load/lib/auth.ts` — port of `backend/test/helpers.ts`                            |
 | Rate Limiting | Pre-step `test:load:flush` runs `FLUSHDB`; Baseline-Wrapper additionally `--user "$(id -u):$(id -g)"` |
 | Thresholds    | Smoke: `p95 < 500 ms` · Baseline per-tag: `read p95 < 100`, `write p95 < 250`, `error rate < 0.1 %`   |
-| TypeScript    | k6 ≥ 0.54 supports `.ts` natively — no transpile step; `load/tsconfig.json` for IDE                   |
+| TypeScript    | k6 supports `.ts` natively — no transpile step; `load/tsconfig.json` for IDE                          |
 | Prerequisites | Docker backend healthy, `assixx` tenant seeded, Redis reachable                                       |
 
 #### Smoke: 1 file, 10 endpoints
@@ -643,13 +643,15 @@ TOTAL: 6477 Unit + 430 Permission (subset) + 399 Frontend + 753 API + 20 E2E = 8
 
 ### Coverage Thresholds (raised 2026-03-23)
 
-| Metric     | Current (2026-03-23) | Threshold (Floor) | Long-term Goal |
+| Metric     | Current (2026-05-06) | Threshold (Floor) | Long-term Goal |
 | ---------- | -------------------- | ----------------- | -------------- |
-| Lines      | **91.07%**           | **86%**           | 93%            |
-| Branches   | **85.56%**           | **80%**           | 88%            |
-| Functions  | **92.36%**           | **87%**           | 93%            |
-| Statements | **91.35%**           | **86%**           | 93%            |
+| Lines      | **91.73%**           | **86%**           | 93%            |
+| Branches   | **85.72%**           | **80%**           | 88%            |
+| Functions  | **93.21%**           | **87%**           | 93%            |
+| Statements | **91.40%**           | **86%**           | 93%            |
 
+> **2026-05-06:** Coverage-Run aller 4 Thresholds bestanden (Puffer +5.4–6.2 pp). API solo: 56/56 grün, 1058 Tests in 127s. **Wichtig:** Für saubere Gates `pnpm vitest run --project unit --project frontend-unit --coverage` nutzen (CI-Kommando) — `test:coverage` zieht alle 4 Projects parallel ein, dabei kippen API-Tests durch geteilten Docker-State (Login-Throttle, Tenant-Fixtures).
+>
 > **2026-03-23:** Thresholds von 83/76/83/83 auf 86/80/87/86 erhöht (~5% Puffer). Bisherige Long-term Goals (90/85/90/90) erreicht und übertroffen — neue Goals: 93/88/93/93. 6455 Unit+Frontend Tests (255 Dateien).
 
 ### Coverage Ignore Comments (v8 Provider)
@@ -714,7 +716,7 @@ unit-tests:
   steps:
     - uses: actions/checkout@v4
     - uses: pnpm/action-setup@v2
-      with: { version: 10.33.2 }
+      with: { version: 10.33.3 }
     - uses: actions/setup-node@v5
       with: { node-version: '24', cache: 'pnpm' }
     - run: pnpm install --frozen-lockfile
@@ -842,4 +844,4 @@ These users are explicitly **not** cleaned by `global-teardown.ts` — see the N
 
 _Last Updated: 2026-04-25 (v13 - Tier 4 expansion: Baseline suite (`load/tests/baseline.ts`) added alongside smoke. Per-tag thresholds (read p95<100, write p95<250), profile-driven VU ramps (`light` 5 VU / `full` 500 VU), optional WS-Soak scenario (50 persistent /chat-ws connections), wrapper script (`scripts/run-load-baseline.sh`) with pre-flight + auto-cleanup + snapshot bootstrap + CI diff. New CI-grade diff utility (`scripts/load-diff.ts`) with 20% relative / 0.5pp absolute regression budgets. Tail-sampling threshold tightened 500ms → 200ms in `docker/otel-collector/collector.yaml` (cross-ADR-048). Baseline values: read p95≈28ms, write p95≈44ms, 0% failure. ADR title broadened to reflect Tier-3/4 inclusion. Companion HOW-TO renamed `HOW-TO-TEST-WITH-VITEST.md` → `HOW-TO-TEST.md` and expanded into umbrella covering all 4 tiers._
 
-_Previously: 2026-04-18 (v12) — Tier 4 Load & Performance Regression tests with k6 v0.54+ (Docker `grafana/k6:latest`). 1 smoke test, 10 hot-path endpoints, 1 VU × 1 min, thresholds p95<500ms / p99<1000ms / err<1%. Baseline recorded: p95=23.64ms, p99=38.11ms. Integrated into `pnpm test`._
+_Previously: 2026-04-18 (v12) — Tier 4 Load & Performance Regression tests with k6 (Docker `grafana/k6:latest`). 1 smoke test, 10 hot-path endpoints, 1 VU × 1 min, thresholds p95<500ms / p99<1000ms / err<1%. Baseline recorded: p95=23.64ms, p99=38.11ms. Integrated into `pnpm test`._

@@ -1083,9 +1083,9 @@ describe('KvpService', () => {
         mineOnly: undefined,
       });
 
-      expect(result.suggestions).toHaveLength(1);
-      expect(result.pagination.currentPage).toBe(1);
-      expect(result.pagination.totalItems).toBe(5);
+      expect(result.items).toHaveLength(1);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.total).toBe(5);
       expect(result.pagination.totalPages).toBe(1);
     });
 
@@ -1107,7 +1107,7 @@ describe('KvpService', () => {
         mineOnly: true,
       });
 
-      expect(result.suggestions).toHaveLength(1);
+      expect(result.items).toHaveLength(1);
     });
 
     it('uses default page=1 and limit=20 when not provided', async () => {
@@ -1126,8 +1126,8 @@ describe('KvpService', () => {
         mineOnly: undefined,
       } as never);
 
-      expect(result.pagination.currentPage).toBe(1);
-      expect(result.pagination.pageSize).toBe(20);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(20);
     });
 
     it('returns empty when count is 0', async () => {
@@ -1148,8 +1148,8 @@ describe('KvpService', () => {
         mineOnly: undefined,
       });
 
-      expect(result.suggestions).toEqual([]);
-      expect(result.pagination.totalItems).toBe(0);
+      expect(result.items).toEqual([]);
+      expect(result.pagination.total).toBe(0);
     });
   });
 

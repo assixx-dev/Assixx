@@ -39,7 +39,6 @@
   flex-shrink: 0;
   justify-content: center;
   align-items: center;
-  backdrop-filter: blur(10px);
 
   transition: all var(--transition-normal);
   border-radius: 50%;
@@ -366,7 +365,6 @@
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  backdrop-filter: blur(10px);
 
   transition: all var(--transition-normal);
   cursor: pointer;

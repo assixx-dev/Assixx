@@ -909,85 +909,81 @@ describe('DepartmentsService', () => {
   });
 
   // =============================================================
-  // assignHallsToDepartment
+  // setDepartmentHall — replaces the old assignHallsToDepartment after
+  // migration 20260505221345432_simplify-department-hall-1to1.
   // =============================================================
 
-  describe('assignHallsToDepartment', () => {
-    it('should clear existing and insert new hall assignments', async () => {
-      // getDepartmentById → find department
-      mockDb.query.mockResolvedValueOnce([makeDeptRow()]);
-      // DELETE existing
-      mockDb.query.mockResolvedValueOnce([]);
-      // INSERT new halls
+  describe('setDepartmentHall', () => {
+    it('should update departments.hall_id when a hall is assigned', async () => {
+      // existence check
+      mockDb.query.mockResolvedValueOnce([{ id: 1 }]);
+      // UPDATE departments SET hall_id = 42 WHERE id = 1 …
       mockDb.query.mockResolvedValueOnce([]);
 
-      const result = await service.assignHallsToDepartment(1, [10, 20, 30], 10, 5);
+      const result = await service.setDepartmentHall(1, 42, 10, 5);
 
-      expect(result.message).toBe('Halls assigned to department successfully');
-      // 3 queries: getDepartmentById(1) + DELETE(1) + INSERT(1)
-      expect(mockDb.query).toHaveBeenCalledTimes(3);
-
-      const insertSql = mockDb.query.mock.calls[2]?.[0] as string;
-      expect(insertSql).toContain('INSERT INTO department_halls');
-      // Verify parameterized values: [tenantId, departmentId, assignedBy, ...hallIds]
-      const insertParams = mockDb.query.mock.calls[2]?.[1] as unknown[];
-      expect(insertParams).toEqual([10, 1, 5, 10, 20, 30]);
+      expect(result.message).toBe('Hall assigned to department');
+      expect(mockDb.query).toHaveBeenCalledTimes(2);
+      const updateSql = mockDb.query.mock.calls[1]?.[0] as string;
+      expect(updateSql).toContain('UPDATE departments SET hall_id');
+      expect(mockDb.query.mock.calls[1]?.[1]).toEqual([42, 1, 10]);
     });
 
-    it('should only clear halls when hallIds is empty', async () => {
-      mockDb.query.mockResolvedValueOnce([makeDeptRow()]); // getDepartmentById
-      mockDb.query.mockResolvedValueOnce([]); // DELETE existing
+    it('should clear hall_id when null is passed', async () => {
+      mockDb.query.mockResolvedValueOnce([{ id: 1 }]);
+      mockDb.query.mockResolvedValueOnce([]);
 
-      const result = await service.assignHallsToDepartment(1, [], 10, 5);
+      const result = await service.setDepartmentHall(1, null, 10, 5);
 
-      expect(result.message).toBe('Halls assigned to department successfully');
-      // Only 2 queries: getDepartmentById(1) + DELETE(1), no INSERT
-      expect(mockDb.query).toHaveBeenCalledTimes(2);
+      expect(result.message).toBe('Hall cleared');
+      expect(mockDb.query.mock.calls[1]?.[1]).toEqual([null, 1, 10]);
     });
 
     it('should throw NotFoundException when department does not exist', async () => {
-      mockDb.query.mockResolvedValueOnce([]); // getDepartmentById → not found
+      mockDb.query.mockResolvedValueOnce([]); // existence check fails
 
-      await expect(service.assignHallsToDepartment(999, [10], 10, 5)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.setDepartmentHall(999, 42, 10, 5)).rejects.toThrow(NotFoundException);
     });
 
-    it('should assign a single hall correctly', async () => {
-      mockDb.query.mockResolvedValueOnce([makeDeptRow()]); // getDepartmentById
-      mockDb.query.mockResolvedValueOnce([]); // DELETE
-      mockDb.query.mockResolvedValueOnce([]); // INSERT
+    it('should translate DB trigger violations into BadRequestException', async () => {
+      mockDb.query.mockResolvedValueOnce([{ id: 1 }]); // existence ok
+      mockDb.query.mockRejectedValueOnce(
+        new Error('Halls must match the department area (1:1 hierarchy, ADR-034).'),
+      );
 
-      await service.assignHallsToDepartment(1, [42], 10, 5);
-
-      const insertSql = mockDb.query.mock.calls[2]?.[0] as string;
-      expect(insertSql).toContain('($1, $2, $4, $3, NOW())');
-      const insertParams = mockDb.query.mock.calls[2]?.[1] as unknown[];
-      expect(insertParams).toEqual([10, 1, 5, 42]);
+      await expect(service.setDepartmentHall(1, 99, 10, 5)).rejects.toThrow(BadRequestException);
     });
   });
 
   // =============================================================
-  // getDepartmentHallIds
+  // getDepartmentHallId
   // =============================================================
 
-  describe('getDepartmentHallIds', () => {
-    it('should return hall IDs for a department', async () => {
-      mockDb.query.mockResolvedValueOnce([{ hall_id: 10 }, { hall_id: 20 }, { hall_id: 30 }]);
+  describe('getDepartmentHallId', () => {
+    it('should return the single hall_id for a department', async () => {
+      mockDb.query.mockResolvedValueOnce([{ hall_id: 42 }]);
 
-      const result = await service.getDepartmentHallIds(1, 10);
+      const result = await service.getDepartmentHallId(1, 10);
 
-      expect(result).toEqual([10, 20, 30]);
+      expect(result).toBe(42);
       const sql = mockDb.query.mock.calls[0]?.[0] as string;
-      expect(sql).toContain('SELECT hall_id FROM department_halls');
+      expect(sql).toContain('SELECT hall_id FROM departments');
     });
 
-    it('should return empty array when no halls assigned', async () => {
+    it('should return null when no hall is assigned', async () => {
+      mockDb.query.mockResolvedValueOnce([{ hall_id: null }]);
+
+      const result = await service.getDepartmentHallId(1, 10);
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null when department row is missing', async () => {
       mockDb.query.mockResolvedValueOnce([]);
 
-      const result = await service.getDepartmentHallIds(1, 10);
+      const result = await service.getDepartmentHallId(1, 10);
 
-      expect(result).toEqual([]);
+      expect(result).toBeNull();
     });
   });
 

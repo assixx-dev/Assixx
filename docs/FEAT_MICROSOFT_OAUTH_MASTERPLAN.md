@@ -354,7 +354,7 @@ backend/src/nest/auth/oauth/
 
 ### Step 2.2: OAuthStateService [✅ DONE 2026-04-16]
 
-**Result:** `oauth-state.service.ts` — `create(mode, codeVerifier)` writes Redis `oauth:state:{uuidv7}` with 600s TTL via `SET ... EX`; `consume(state)` does atomic `GETDEL` (ioredis 5.10.1 `redis.getdel()`, Redis 8.6.2 native command). Throws `UnauthorizedException` on miss/parse-fail/type-mismatch. Defends R2 (state replay).
+**Result:** `oauth-state.service.ts` — `create(mode, codeVerifier)` writes Redis `oauth:state:{uuidv7}` with 600s TTL via `SET ... EX`; `consume(state)` does atomic `GETDEL` (ioredis 5.10.1 `redis.getdel()`, Redis 8.6.3 native command). Throws `UnauthorizedException` on miss/parse-fail/type-mismatch. Defends R2 (state replay).
 
 Hardening:
 
@@ -363,7 +363,7 @@ Hardening:
 - `OAUTH_REDIS_CLIENT` token extracted into new `oauth.tokens.ts` to break a service↔module dependency cycle that ESLint surfaced (`import-x/no-cycle`)
 - Service registered + exported in `oauth.module.ts`
 
-Smoke test: `SET oauth:state:test '...' EX 600` + `GETDEL` returns value, second `GETDEL` returns nil — atomic single-use verified end-to-end against the live Redis 8.6.2 container. TS strict + ESLint both clean. Backend boot clean.
+Smoke test: `SET oauth:state:test '...' EX 600` + `GETDEL` returns value, second `GETDEL` returns nil — atomic single-use verified end-to-end against the live Redis 8.6.3 container. TS strict + ESLint both clean. Backend boot clean.
 
 **File:** `backend/src/nest/auth/oauth/oauth-state.service.ts`
 

@@ -119,7 +119,14 @@ describe('Dummy Users: Create', () => {
 // ---- seq: 3 -- CRUD: List Dummies -------------------------------------------
 
 describe('Dummy Users: List', () => {
-  it('should return 200 with items array', async () => {
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.1 (2026-05-04): GET /dummy-users
+  // now ships the canonical ADR-007 envelope `{ success, data: T[], meta:
+  // { pagination: { page, limit, total, totalPages } }, timestamp }`. The
+  // ResponseInterceptor extracts the service's `items[]` into `data` and
+  // forwards `pagination` verbatim into `meta.pagination`. The frontend
+  // `apiFetchPaginated<T>` helper rejects anything else (Phase-2 contract,
+  // masterplan changelog 1.4.0).
+  it('should return 200 with canonical ADR-007 envelope', async () => {
     const res = await fetch(`${BASE_URL}/dummy-users`, {
       headers: authOnly(adminAuth.authToken),
     });
@@ -127,8 +134,13 @@ describe('Dummy Users: List', () => {
 
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(Array.isArray(body.data.items)).toBe(true);
-    expect(body.data.total).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.data.length).toBeGreaterThanOrEqual(1);
+    expect(body.meta?.pagination).toBeDefined();
+    expect(typeof body.meta.pagination.page).toBe('number');
+    expect(typeof body.meta.pagination.limit).toBe('number');
+    expect(body.meta.pagination.total).toBeGreaterThanOrEqual(1);
+    expect(typeof body.meta.pagination.totalPages).toBe('number');
   });
 
   it('should only contain dummy users, not employees', async () => {
@@ -136,11 +148,33 @@ describe('Dummy Users: List', () => {
       headers: authOnly(adminAuth.authToken),
     });
     const body = (await res.json()) as JsonBody;
-    const items = body.data.items as Array<{ email: string }>;
+    const items = body.data as Array<{ email: string }>;
 
     for (const item of items) {
       expect(item.email).toMatch(/dummy/i);
     }
+  });
+
+  // Plan §Step 3.1 mandate: verify `?page=2&limit=10` round-trips correctly
+  // and `meta.pagination.totalPages = ceil(total / limit)` (or 0 when total=0).
+  it('should echo ?page=2&limit=10 with correct totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/dummy-users?page=2&limit=10`, {
+      headers: authOnly(adminAuth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(10);
+    const { total, limit, totalPages } = body.meta.pagination as {
+      total: number;
+      limit: number;
+      totalPages: number;
+    };
+    const expectedTotalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    expect(totalPages).toBe(expectedTotalPages);
   });
 });
 
@@ -304,5 +338,118 @@ describe('Dummy Users: Query Isolation', () => {
     const users = body.data as Array<{ role: string }>;
     const dummies = users.filter((u: { role: string }) => u.role === 'dummy');
     expect(dummies).toHaveLength(0);
+  });
+});
+
+// ---- seq: 9 -- Pagination (Step 5.1) ----------------------------------------
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14, 2026-05-06):
+// every migrated endpoint receives 4 dedicated pagination assertions —
+//   1. ?page=2&limit=N returns correct slice + correct meta.pagination.totalPages
+//   2. ?search=<term> returns matches that exist beyond page 1
+//   3. Combined ?page=2&search=<term> returns correct slice of search hits
+//   4. Tenant-isolation sanity (RLS unchanged but verify): search by unique tag
+//      returns EXACTLY the seeded set; no foreign-tenant records leak in.
+//
+// Seed 22 dummies with a unique `displayName` tag so search results are
+// deterministic and scoped to the test tenant 1 (`apitest`, subdomain `assixx`).
+// 22 = 2 × `limit` + 2 — guarantees `totalPages >= 3` so test #2's
+// "matches beyond page 1" claim is structural, not coincidental.
+describe('Dummy Users: Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededUuids: string[] = [];
+
+  beforeAll(async () => {
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/dummy-users`, {
+        method: 'POST',
+        headers: authHeaders(adminAuth.authToken),
+        body: JSON.stringify({
+          displayName: `${tag}_${String(i).padStart(2, '0')}`,
+          password: DUMMY_PASSWORD,
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: dummy ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededUuids.push(body.data.uuid as string);
+    }
+  });
+
+  afterAll(async () => {
+    for (const uuid of seededUuids) {
+      await fetch(`${BASE_URL}/dummy-users/${uuid}`, {
+        method: 'DELETE',
+        headers: authOnly(adminAuth.authToken),
+      });
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/dummy-users?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(adminAuth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    // Page 2 of 22 with limit 10 → exactly 10 items
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ displayName: string }>) {
+      expect(item.displayName).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${BASE_URL}/dummy-users?search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(adminAuth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    // Total exactly equals our seed → proves no pre-existing dummies match the tag
+    expect(body.meta.pagination.total).toBe(seedCount);
+    // ceil(22/10) = 3 → matches exist on pages 2 AND 3
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${BASE_URL}/dummy-users?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(adminAuth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ displayName: string }>) {
+      expect(item.displayName).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    // Fetch every search hit at limit=100 and assert the UUID set === seeded set.
+    // Proves the response respects RLS scoping — no records from other tenants
+    // appear under our tag, and no stale records from prior runs survive.
+    const res = await fetch(`${BASE_URL}/dummy-users?search=${tag}&limit=100`, {
+      headers: authOnly(adminAuth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedUuids = (body.data as Array<{ uuid: string }>).map((d) => d.uuid).sort();
+    expect(returnedUuids).toEqual([...seededUuids].sort());
   });
 });

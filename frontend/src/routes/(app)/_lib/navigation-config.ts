@@ -264,14 +264,9 @@ const VACATION_ROOT_SUBMENU: NavItem[] = [
   },
 ];
 
-/** Organigram submenu (root only) */
+/** Organigram submenu (root only) — Positionen moved to Firmen-Einstellungen 2026-05-05 */
 const ORGANIGRAM_SUBMENU: NavItem[] = [
   { id: 'organigram-chart', label: 'Übersicht', url: '/settings/organigram' },
-  {
-    id: 'organigram-positions',
-    label: 'Positionen',
-    url: '/settings/organigram/positions',
-  },
 ];
 
 /**
@@ -324,6 +319,16 @@ const SYSTEM_SUBMENU: NavItem[] = [
     submenu: [
       { id: 'company-settings-overview', label: 'Übersicht', url: '/company-settings' },
       { id: 'addon-settings', label: 'Modul-Konfiguration', url: '/settings/company' },
+      // Positionen: org structural config — surfaced here per user request 2026-05-05.
+      // WHY: tenant-level structural config grouped under Firmen-Einstellungen.
+      // NOTE: same URL is also reachable via System → Organigramm → Positionen
+      // (ORGANIGRAM_SUBMENU above). Two parent paths to one route — kept until
+      // user signs off on collapsing the duplicate.
+      {
+        id: 'company-settings-positions',
+        label: 'Positionen',
+        url: '/settings/organigram/positions',
+      },
       { id: 'design', label: 'Design', url: '/settings/design' },
     ],
   },

@@ -104,16 +104,19 @@ export interface AssetFormData {
 }
 
 /**
- * Asset status filter types
+ * Asset status filter types — Phase 4.4b: aligned 1:1 with backend
+ * `?status=` enum (`assets/dto/list-assets-query.dto.ts:AssetStatusEnum`)
+ * plus `'all'` as the no-filter sentinel.
+ *
+ * Pre-Phase-4.4b this set included `'cleaning'` and `'other'`, which never
+ * existed in the backend enum and silently filtered to zero matches in the
+ * client-side filter. Greenfield (CLAUDE.md): drift removed without a
+ * migration shim. `'decommissioned'` is now the canonical end-of-life
+ * status (see `STATUS_LABELS` in `_lib/constants.ts`).
+ *
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4b (D5)
  */
-export type AssetStatusFilter =
-  | 'all'
-  | 'operational'
-  | 'maintenance'
-  | 'repair'
-  | 'standby'
-  | 'cleaning'
-  | 'other';
+export type AssetStatusFilter = 'all' | AssetStatus;
 
 /**
  * Generic API response wrapper
@@ -148,14 +151,16 @@ export interface AssetTeam {
   notes?: string;
 }
 
-/**
- * Pagination page item — UI representation of a page-button slot.
- *
- * Mirrors manage-admins / manage-employees / manage-root / /logs so the
- * design-system pagination markup can be reused 1:1.
- *
- * @see frontend/src/design-system/primitives/navigation/pagination.css
- */
-export type PaginationPageItem =
-  | { type: 'page'; value: number; active?: boolean }
-  | { type: 'ellipsis' };
+// Phase 4.4b (2026-05-05): `PaginationPageItem` (the ellipsis-aware
+// page-button UI item type) was removed. Server-driven pagination
+// renders one anchor per page via `Array.from({length: totalPages})`
+// in `+page.svelte` — the simpler shape from the §4.1b reference impl.
+// The previous ellipsis helper (`getVisiblePages`) capped the visible
+// window at 5 pages; with realistic tenant volumes (≤ 100 assets, page
+// size 25 → ≤ 4 pages) the window cap was unreachable, so the helper
+// was pure complexity without payoff. If a tenant ever lands > 10 pages
+// the simple list still renders correctly — we revisit windowing only
+// when real data demands it.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.4b
+// @see frontend/src/routes/(app)/(shared)/manage-employees/+page.svelte (reference impl)

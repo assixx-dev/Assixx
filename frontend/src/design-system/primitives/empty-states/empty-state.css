@@ -39,7 +39,6 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  backdrop-filter: blur(10px);
   margin-bottom: var(--spacing-4);
   border: 1px solid var(--glass-bg-active);
   border-radius: 50%;
@@ -140,7 +139,6 @@
 
 /* Bordered variant - with card border */
 .empty-state--bordered {
-  backdrop-filter: blur(10px);
   border: 1px solid var(--color-glass-border);
   border-radius: var(--radius-xl);
   background: var(--glass-bg);

@@ -3,9 +3,12 @@
    * TPM Card List Component
    * @module cards/[uuid]/_lib/CardList
    *
-   * Displays a filterable, paginated table of TPM cards for a plan.
-   * Filters: status, intervalType, cardRole.
-   * Each row has edit/delete actions.
+   * Phase 4.11b (2026-05-06): URL-state-driven. Filter values arrive as props
+   * (URL-derived); filter changes emit `onfilterchange` to the parent for
+   * URL navigation. Server now applies the WHERE clauses, so client-side
+   * `filteredCards` derivation is dropped.
+   *
+   * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Migration order" row 4.11
    */
   import {
     INTERVAL_LABELS,
@@ -17,43 +20,47 @@
 
   import type { TpmCard, CardStatus, IntervalType, CardRole } from '../../../_admin/types';
 
+  /** Empty string = "no filter" sentinel; mirrors the URL contract in `+page.server.ts`. */
+  type StatusFilterValue = CardStatus | '';
+  type IntervalFilterValue = IntervalType | '';
+  type RoleFilterValue = CardRole | '';
+
   interface Props {
     cards: TpmCard[];
     totalCards: number;
-    loading: boolean;
+    statusFilter: StatusFilterValue;
+    intervalFilter: IntervalFilterValue;
+    roleFilter: RoleFilterValue;
+    onfilterchange: (updates: {
+      status?: StatusFilterValue;
+      intervalType?: IntervalFilterValue;
+      cardRole?: RoleFilterValue;
+    }) => void;
     onedit: (card: TpmCard) => void;
     ondelete: (card: TpmCard) => void;
   }
 
-  const { cards, totalCards, loading, onedit, ondelete }: Props = $props();
+  const {
+    cards,
+    totalCards,
+    statusFilter,
+    intervalFilter,
+    roleFilter,
+    onfilterchange,
+    onedit,
+    ondelete,
+  }: Props = $props();
 
   // =========================================================================
-  // FILTER STATE
+  // DERIVED — server filters now; component just renders incoming `cards`
   // =========================================================================
-
-  let statusFilter = $state<CardStatus | ''>('');
-  let intervalFilter = $state<IntervalType | ''>('');
-  let roleFilter = $state<CardRole | ''>('');
-
-  // =========================================================================
-  // DERIVED
-  // =========================================================================
-
-  const filteredCards = $derived(
-    cards.filter((card: TpmCard) => {
-      if (statusFilter !== '' && card.status !== statusFilter) return false;
-      if (intervalFilter !== '' && card.intervalType !== intervalFilter) return false;
-      if (roleFilter !== '' && card.cardRole !== roleFilter) return false;
-      return true;
-    }),
-  );
 
   const hasActiveFilters = $derived(
     statusFilter !== '' || intervalFilter !== '' || roleFilter !== '',
   );
 
   // =========================================================================
-  // DROPDOWN STATE
+  // DROPDOWN UI STATE — open/close only, NOT data state
   // =========================================================================
 
   let statusDropdownOpen = $state(false);
@@ -114,13 +121,24 @@
   const ROLE_OPTIONS: CardRole[] = ['operator', 'maintenance'];
 
   // =========================================================================
-  // HANDLERS
+  // HANDLERS — every change emits to parent for URL navigation
   // =========================================================================
 
+  function selectStatus(v: StatusFilterValue): void {
+    onfilterchange({ status: v });
+    statusDropdownOpen = false;
+  }
+  function selectInterval(v: IntervalFilterValue): void {
+    onfilterchange({ intervalType: v });
+    intervalDropdownOpen = false;
+  }
+  function selectRole(v: RoleFilterValue): void {
+    onfilterchange({ cardRole: v });
+    roleDropdownOpen = false;
+  }
+
   function clearFilters(): void {
-    statusFilter = '';
-    intervalFilter = '';
-    roleFilter = '';
+    onfilterchange({ status: '', intervalType: '', cardRole: '' });
     closeAllDropdowns();
   }
 
@@ -166,8 +184,7 @@
         class="dropdown__option"
         class:dropdown__option--selected={statusFilter === ''}
         onclick={() => {
-          statusFilter = '';
-          statusDropdownOpen = false;
+          selectStatus('');
         }}
       >
         {MESSAGES.FILTER_ALL_STATUS}
@@ -178,8 +195,7 @@
           class="dropdown__option"
           class:dropdown__option--selected={statusFilter === status}
           onclick={() => {
-            statusFilter = status;
-            statusDropdownOpen = false;
+            selectStatus(status);
           }}
         >
           {CARD_STATUS_LABELS[status]}
@@ -214,8 +230,7 @@
         class="dropdown__option"
         class:dropdown__option--selected={intervalFilter === ''}
         onclick={() => {
-          intervalFilter = '';
-          intervalDropdownOpen = false;
+          selectInterval('');
         }}
       >
         {MESSAGES.FILTER_ALL_INTERVALS}
@@ -226,8 +241,7 @@
           class="dropdown__option"
           class:dropdown__option--selected={intervalFilter === intv}
           onclick={() => {
-            intervalFilter = intv;
-            intervalDropdownOpen = false;
+            selectInterval(intv);
           }}
         >
           {INTERVAL_LABELS[intv]}
@@ -262,8 +276,7 @@
         class="dropdown__option"
         class:dropdown__option--selected={roleFilter === ''}
         onclick={() => {
-          roleFilter = '';
-          roleDropdownOpen = false;
+          selectRole('');
         }}
       >
         {MESSAGES.FILTER_ALL_ROLES}
@@ -274,8 +287,7 @@
           class="dropdown__option"
           class:dropdown__option--selected={roleFilter === role}
           onclick={() => {
-            roleFilter = role;
-            roleDropdownOpen = false;
+            selectRole(role);
           }}
         >
           {CARD_ROLE_LABELS[role]}
@@ -296,17 +308,12 @@
   {/if}
 
   <span class="ml-auto text-sm text-(--color-text-muted)">
-    {filteredCards.length} / {totalCards} Karten
+    {cards.length} / {totalCards} Karten
   </span>
 </div>
 
 <!-- Table -->
-{#if loading}
-  <div class="flex items-center justify-center gap-2 p-12 text-(--color-text-muted)">
-    <i class="fas fa-spinner fa-spin"></i>
-    {MESSAGES.LOADING}
-  </div>
-{:else if filteredCards.length === 0}
+{#if cards.length === 0}
   <div class="empty-state">
     <div class="empty-state__icon">
       <i class="fas fa-clipboard"></i>
@@ -317,7 +324,7 @@
   </div>
 {:else}
   <div class="table-responsive">
-    <table class="data-table data-table--hover data-table--striped">
+    <table class="data-table data-table--hover data-table--striped data-table--actions-hover">
       <thead>
         <tr>
           <th scope="col">{MESSAGES.TH_CARD_CODE}</th>
@@ -332,7 +339,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each filteredCards as card (card.uuid)}
+        {#each cards as card (card.uuid)}
           <tr>
             <td>
               <code class="text-sm font-semibold text-(--color-text-secondary)">

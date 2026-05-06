@@ -82,13 +82,14 @@ export async function exportToExcel(surveyId: string): Promise<boolean> {
 
   try {
     const endpoint = API_ENDPOINTS.surveyExport(surveyId, 'excel');
-    // Use accessToken (not 'token') for consistency with rest of app
-    const token = localStorage.getItem('accessToken') ?? '';
-
+    // Auth flows through the HttpOnly accessToken cookie (ADR-046).
+    // `credentials: 'include'` ensures it is sent on this same-origin fetch
+    // (same default in modern browsers, but explicit for clarity).
+    // Previous impl read `localStorage.getItem('accessToken')` and sent
+    // `Bearer <empty>` on every call → backend rejected with 401 and the
+    // export was permanently broken (fixed 2026-05-06).
     const response = await fetch(`/api/v2${endpoint}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      credentials: 'include',
     });
 
     if (!response.ok) {

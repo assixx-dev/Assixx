@@ -67,15 +67,15 @@ const ERROR_MESSAGES = {
     'Mitarbeiter dürfen keinen Vollzugriff erhalten. Nur Admin- und Root-Benutzer können has_full_access=true haben.',
 } as const;
 
-/** Empty paginated result for scope-denied or no-data cases */
+/** Empty paginated result for scope-denied or no-data cases — canonical ADR-007 envelope keys (Phase 4.1a, masterplan §D4). */
 function emptyPaginatedResult(page: number, limit: number): PaginatedResult<SafeUserResponse> {
   return {
     data: [],
     pagination: {
-      currentPage: page,
+      page,
+      limit,
+      total: 0,
       totalPages: 0,
-      pageSize: limit,
-      totalItems: 0,
     },
   };
 }
@@ -156,13 +156,19 @@ export class UsersService {
     }
 
     const scopeInfo = await this.resolveScopeInfo(tenantId);
+    // Canonical ADR-007 envelope keys (Phase 4.1a, masterplan §D4).
+    // `totalPages = total === 0 ? 0 : Math.ceil(total / limit)` keeps the
+    // FE empty-state branch (`pagination.total === 0`) and bounds derivation
+    // (`hasNext = page < totalPages`) coherent — same math as dummy-users
+    // (Phase 3.1, changelog 1.7.0).
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
     return {
       data: responses,
       pagination: {
-        currentPage: page,
-        totalPages: Math.ceil(total / limit),
-        pageSize: limit,
-        totalItems: total,
+        page,
+        limit,
+        total,
+        totalPages,
       },
       ...(scopeInfo !== undefined ? { scope: scopeInfo } : {}),
     };

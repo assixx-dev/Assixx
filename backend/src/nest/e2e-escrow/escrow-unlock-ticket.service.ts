@@ -38,7 +38,7 @@
  *   1. Ticket bound to `{ userId, tenantId }` at create time, cross-checked
  *      at consume time → another authenticated user cannot replay.
  *   2. TTL 60s — narrow attack window vs. Redis-dump + in-flight ticket.
- *   3. GETDEL atomic (Redis 6.2+, confirmed 8.6.2 in use) — no race.
+ *   3. GETDEL atomic (Redis 6.2+, confirmed 8.6.3 in use) — no race.
  *   4. 128-bit UUIDv7 entropy — unguessable.
  *   5. NEVER log the wrappingKey value (same rule as codeVerifier in OAuth).
  *

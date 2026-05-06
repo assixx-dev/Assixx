@@ -1,15 +1,17 @@
 <script lang="ts">
-  import {
-    getStatusBadgeClass,
-    getStatusLabel,
-    getSelectedAreaName,
-    getSelectedLeadName,
-  } from './utils';
+  import PickerTypeahead from '$lib/components/PickerTypeahead.svelte';
 
+  import { getStatusBadgeClass, getStatusLabel, getSelectedAreaName } from './utils';
+
+  import type { PickerOption } from '$lib/components/picker-typeahead-helpers';
   import type { DepartmentMessages } from './constants';
-  import type { FormIsActiveStatus, Area, AdminUser, Hall } from './types';
+  import type { FormIsActiveStatus, Area, Hall } from './types';
 
-  // Props with bindable for two-way binding
+  /**
+   * Lead-candidate pickers (department lead + deputy) consume
+   * PickerTypeahead with `position=department_lead` (FEAT_SERVER_DRIVEN_PAGINATION
+   * §4.12 §D23). Both bindings are full PickerOption objects, NOT scalar IDs.
+   */
   interface Props {
     show: boolean;
     isEditMode: boolean;
@@ -18,13 +20,13 @@
     formName: string;
     formDescription: string;
     formAreaId: number | null;
-    formDepartmentLeadId: number | null;
-    formDepartmentDeputyLeadId: number | null;
-    formDirectHallIds: number[];
+    formDepartmentLead: PickerOption | null;
+    formDepartmentDeputyLead: PickerOption | null;
+    /** Single hall ID (1:1 model after migration 20260505221345432). */
+    formHallId: number | null;
     formIsActive: FormIsActiveStatus;
     allAreas: Area[];
     allHalls: Hall[];
-    allDepartmentLeads: AdminUser[];
     submitting: boolean;
     onclose: () => void;
     onsubmit: (e: Event) => void;
@@ -32,30 +34,48 @@
 
   /* eslint-disable prefer-const, @typescript-eslint/no-useless-default-assignment -- Svelte $bindable() requires let and is not a useless default */
   // prettier-ignore
-  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaId = $bindable(), formDepartmentLeadId = $bindable(), formDepartmentDeputyLeadId = $bindable(), formDirectHallIds = $bindable(), formIsActive = $bindable(), allAreas, allHalls, allDepartmentLeads, submitting, onclose, onsubmit }: Props = $props();
+  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaId = $bindable(), formDepartmentLead = $bindable(), formDepartmentDeputyLead = $bindable(), formHallId = $bindable(), formIsActive = $bindable(), allAreas, allHalls, submitting, onclose, onsubmit }: Props = $props();
   /* eslint-enable prefer-const, @typescript-eslint/no-useless-default-assignment */
 
-  // Split halls into inherited (same area as dept) vs available cross-area.
-  // Inherited halls are shown read-only; cross-area halls populate the editable multi-select.
-  const inheritedHalls = $derived(
+  // Picker filters: shared dataset for lead + deputy. No `role=` filter so
+  // backend returns admin + root candidates with `position=department_lead`
+  // mixed (matches the pre-Phase-4.12 admins+roots SSR merge).
+  const departmentLeadPickerParams = { isActive: '1', position: 'department_lead' } as const;
+
+  /**
+   * After migration 20260505221345432_simplify-department-hall-1to1, halls are
+   * 1:1 with departments and must belong to the same area. The cross-area
+   * multi-select was removed; only halls with `h.areaId === formAreaId` are
+   * selectable. If the area changes, the selection is auto-cleared.
+   */
+  const sameAreaHalls = $derived(
     formAreaId === null ? [] : allHalls.filter((h) => h.areaId === formAreaId),
   );
-  const crossAreaHalls = $derived(allHalls.filter((h) => h.areaId !== formAreaId));
   const areaName = $derived(
     formAreaId === null ? '' : (allAreas.find((a) => a.id === formAreaId)?.name ?? ''),
   );
 
-  // Local dropdown states
+  // Auto-clear hall when area changes or when current selection no longer matches.
+  $effect(() => {
+    if (formHallId === null) return;
+    const stillValid = sameAreaHalls.some((h) => h.id === formHallId);
+    if (!stillValid) {
+      formHallId = null;
+    }
+  });
+
+  // Local dropdown states (lead/deputy dropdowns now owned by PickerTypeahead).
   let areaDropdownOpen = $state(false);
-  let leadDropdownOpen = $state(false);
-  let deputyLeadDropdownOpen = $state(false);
+  let hallDropdownOpen = $state(false);
   let statusDropdownOpen = $state(false);
 
   // Derived dropdown display names
   const selectedAreaName = $derived(getSelectedAreaName(formAreaId, allAreas));
-  const selectedLeadName = $derived(getSelectedLeadName(formDepartmentLeadId, allDepartmentLeads));
-  const selectedDeputyLeadName = $derived(
-    getSelectedLeadName(formDepartmentDeputyLeadId, allDepartmentLeads),
+  // Hall is 1:1 and area-scoped; show the matching hall name or NO_HALL fallback.
+  const selectedHallName = $derived(
+    formHallId === null ?
+      messages.NO_HALL
+    : (sameAreaHalls.find((h) => h.id === formHallId)?.name ?? messages.NO_HALL),
   );
 
   // =============================================================================
@@ -64,8 +84,7 @@
 
   function toggleAreaDropdown(e: MouseEvent): void {
     e.stopPropagation();
-    leadDropdownOpen = false;
-    deputyLeadDropdownOpen = false;
+    hallDropdownOpen = false;
     statusDropdownOpen = false;
     areaDropdownOpen = !areaDropdownOpen;
   }
@@ -75,37 +94,22 @@
     areaDropdownOpen = false;
   }
 
-  function toggleLeadDropdown(e: MouseEvent): void {
+  function toggleHallDropdown(e: MouseEvent): void {
     e.stopPropagation();
     areaDropdownOpen = false;
-    deputyLeadDropdownOpen = false;
     statusDropdownOpen = false;
-    leadDropdownOpen = !leadDropdownOpen;
+    hallDropdownOpen = !hallDropdownOpen;
   }
 
-  function selectLead(leadId: number | null): void {
-    formDepartmentLeadId = leadId;
-    leadDropdownOpen = false;
-  }
-
-  function toggleDeputyLeadDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    areaDropdownOpen = false;
-    leadDropdownOpen = false;
-    statusDropdownOpen = false;
-    deputyLeadDropdownOpen = !deputyLeadDropdownOpen;
-  }
-
-  function selectDeputyLead(leadId: number | null): void {
-    formDepartmentDeputyLeadId = leadId;
-    deputyLeadDropdownOpen = false;
+  function selectHall(hallId: number | null): void {
+    formHallId = hallId;
+    hallDropdownOpen = false;
   }
 
   function toggleStatusDropdown(e: MouseEvent): void {
     e.stopPropagation();
     areaDropdownOpen = false;
-    leadDropdownOpen = false;
-    deputyLeadDropdownOpen = false;
+    hallDropdownOpen = false;
     statusDropdownOpen = !statusDropdownOpen;
   }
 
@@ -122,36 +126,48 @@
     return el?.contains(target) !== true;
   }
 
+  /**
+   * Closes a dropdown when it is open AND the click was outside its element.
+   * Extracted to keep the outside-click effect's arrow function at cyclomatic
+   * complexity 1 — five inline `if (open && outside)` checks pushed it to 11
+   * (ESLint `complexity` cap is 10, see [CODE-OF-CONDUCT.md] hard limits).
+   */
+  function closeIfOutside(
+    isOpen: boolean,
+    target: HTMLElement,
+    elementId: string,
+    close: () => void,
+  ): void {
+    if (isOpen && isClickOutsideElement(target, elementId)) {
+      close();
+    }
+  }
+
   // Reset local UI state when modal opens
   $effect(() => {
     if (show) {
       areaDropdownOpen = false;
-      leadDropdownOpen = false;
-      deputyLeadDropdownOpen = false;
+      hallDropdownOpen = false;
       statusDropdownOpen = false;
     }
   });
 
   // Close dropdowns on outside click
   $effect(() => {
-    const anyDropdownOpen =
-      areaDropdownOpen || leadDropdownOpen || deputyLeadDropdownOpen || statusDropdownOpen;
+    const anyDropdownOpen = areaDropdownOpen || hallDropdownOpen || statusDropdownOpen;
     if (!anyDropdownOpen) return;
 
     const handleClick = (e: MouseEvent): void => {
       const target = e.target as HTMLElement;
-      if (areaDropdownOpen && isClickOutsideElement(target, 'area-dropdown')) {
+      closeIfOutside(areaDropdownOpen, target, 'area-dropdown', () => {
         areaDropdownOpen = false;
-      }
-      if (leadDropdownOpen && isClickOutsideElement(target, 'lead-dropdown')) {
-        leadDropdownOpen = false;
-      }
-      if (deputyLeadDropdownOpen && isClickOutsideElement(target, 'deputy-lead-dropdown')) {
-        deputyLeadDropdownOpen = false;
-      }
-      if (statusDropdownOpen && isClickOutsideElement(target, 'status-dropdown')) {
+      });
+      closeIfOutside(hallDropdownOpen, target, 'hall-dropdown', () => {
+        hallDropdownOpen = false;
+      });
+      closeIfOutside(statusDropdownOpen, target, 'status-dropdown', () => {
         statusDropdownOpen = false;
-      }
+      });
     };
 
     document.addEventListener('click', handleClick, true);
@@ -274,14 +290,19 @@
           </div>
         </div>
 
+        <!-- Department Lead Picker (typeahead).
+             Label rendered as <span> + linked via PickerTypeahead's
+             `labelledBy` prop (aria-labelledby on the inner input) —
+             a <label for=> would orphan because the picker owns its
+             input id. -->
         <div class="form-field">
-          <label
+          <span
             class="form-field__label"
-            for="lead-hidden"
+            id="department-lead-label"
           >
             <i class="fas fa-user-tie mr-1"></i>
             {messages.LABEL_DEPARTMENT_LEAD}
-          </label>
+          </span>
           <div
             class="alert alert--info alert--sm"
             style="margin-bottom: var(--spacing-3);"
@@ -297,171 +318,105 @@
               </p>
             </div>
           </div>
-          <input
-            type="hidden"
-            id="lead-hidden"
-            value={formDepartmentLeadId ?? ''}
+          <PickerTypeahead
+            bind:value={formDepartmentLead}
+            searchParams={departmentLeadPickerParams}
+            labelledBy="department-lead-label"
+            placeholderText={messages.NO_DEPARTMENT_LEAD}
           />
-          {#if allDepartmentLeads.length > 0}
-            <div
-              class="dropdown"
-              id="lead-dropdown"
-            >
-              <button
-                type="button"
-                class="dropdown__trigger"
-                class:active={leadDropdownOpen}
-                onclick={toggleLeadDropdown}
-              >
-                <span>{selectedLeadName}</span>
-                <i class="fas fa-chevron-down"></i>
-              </button>
-              <div
-                class="dropdown__menu"
-                class:active={leadDropdownOpen}
-              >
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectLead(null);
-                  }}
-                >
-                  {messages.NO_DEPARTMENT_LEAD}
-                </button>
-                {#each allDepartmentLeads as lead (lead.id)}
-                  <button
-                    type="button"
-                    class="dropdown__option"
-                    onclick={() => {
-                      selectLead(lead.id);
-                    }}
-                  >
-                    {lead.firstName}
-                    {lead.lastName} ({lead.role === 'root' ? 'Root' : 'Admin'})
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
         </div>
 
+        <!-- Department Deputy Lead Picker (typeahead). Span-as-label, see above. -->
         <div class="form-field">
-          <label
+          <span
             class="form-field__label"
-            for="deputy-lead-hidden"
+            id="department-deputy-lead-label"
           >
             <i class="fas fa-user-shield mr-1"></i>
             Stellvertreter
-          </label>
-          <input
-            type="hidden"
-            id="deputy-lead-hidden"
-            value={formDepartmentDeputyLeadId ?? ''}
+          </span>
+          <PickerTypeahead
+            bind:value={formDepartmentDeputyLead}
+            searchParams={departmentLeadPickerParams}
+            labelledBy="department-deputy-lead-label"
+            placeholderText="— Kein Stellvertreter —"
           />
-          {#if allDepartmentLeads.length > 0}
+        </div>
+
+        <!--
+          Hall (1:1, must match the department's area).
+          The DB trigger trg_enforce_dept_hall_area_match enforces the
+          area-match invariant; the dropdown only lists same-area halls.
+        -->
+        <div class="form-field">
+          <label
+            class="form-field__label"
+            for="department-hall"
+          >
+            <i class="fas fa-warehouse mr-1"></i>
+            Halle
+          </label>
+          {#if formAreaId === null}
+            <p class="form-field__message text-(--color-text-secondary)">
+              <i class="fas fa-info-circle mr-1"></i>
+              Bitte zuerst einen Bereich wählen — die Halle muss zum Bereich der Abteilung gehören.
+            </p>
+          {:else if sameAreaHalls.length === 0}
+            <p class="form-field__message text-(--color-text-secondary)">
+              <i class="fas fa-info-circle mr-1"></i>
+              Im Bereich "{areaName}" sind keine Hallen vorhanden.
+            </p>
+          {:else}
+            <input
+              type="hidden"
+              id="hall-hidden"
+              value={formHallId ?? ''}
+            />
             <div
               class="dropdown"
-              id="deputy-lead-dropdown"
+              id="hall-dropdown"
             >
               <button
                 type="button"
                 class="dropdown__trigger"
-                class:active={deputyLeadDropdownOpen}
-                onclick={toggleDeputyLeadDropdown}
+                class:active={hallDropdownOpen}
+                onclick={toggleHallDropdown}
               >
-                <span>{selectedDeputyLeadName}</span>
+                <span>{selectedHallName}</span>
                 <i class="fas fa-chevron-down"></i>
               </button>
               <div
                 class="dropdown__menu"
-                class:active={deputyLeadDropdownOpen}
+                class:active={hallDropdownOpen}
               >
                 <button
                   type="button"
                   class="dropdown__option"
                   onclick={() => {
-                    selectDeputyLead(null);
+                    selectHall(null);
                   }}
                 >
-                  {messages.NO_DEPARTMENT_LEAD}
+                  {messages.NO_HALL}
                 </button>
-                {#each allDepartmentLeads as lead (lead.id)}
+                {#each sameAreaHalls as hall (hall.id)}
                   <button
                     type="button"
                     class="dropdown__option"
                     onclick={() => {
-                      selectDeputyLead(lead.id);
+                      selectHall(hall.id);
                     }}
                   >
-                    {lead.firstName}
-                    {lead.lastName} ({lead.role === 'root' ? 'Root' : 'Admin'})
+                    {hall.name}
                   </button>
                 {/each}
               </div>
             </div>
-          {/if}
-        </div>
-
-        <!-- Inherited halls info (Section 1): shown only when dept has an area WITH halls -->
-        {#if inheritedHalls.length > 0}
-          <div
-            class="alert alert--info alert--sm"
-            style="margin-bottom: var(--spacing-3);"
-          >
-            <span class="alert__icon">
-              <i class="fas fa-info-circle"></i>
+            <span class="form-field__message text-(--color-text-secondary)">
+              <i class="fas fa-info-circle mr-1"></i>
+              Genau eine Halle aus dem Bereich "{areaName}". Teams dieser Abteilung erben die Halle
+              automatisch.
             </span>
-            <div class="alert__content">
-              <p class="alert__message">
-                {messages.hallsInheritedInfo(inheritedHalls.length, areaName)}
-              </p>
-              <ul class="mt-2 flex flex-wrap gap-1">
-                {#each inheritedHalls as hall (hall.id)}
-                  <li>
-                    <span class="badge badge--info">
-                      <i class="fas fa-lock mr-1"></i>{hall.name}
-                    </span>
-                  </li>
-                {/each}
-              </ul>
-              <p class="mt-2 text-sm opacity-75">
-                {messages.HALLS_INHERITED_HINT}
-              </p>
-            </div>
-          </div>
-        {/if}
-
-        <!-- Cross-area halls (Section 2): editable multi-select, optional -->
-        <div class="form-field">
-          <label
-            class="form-field__label"
-            for="department-direct-halls"
-          >
-            <i class="fas fa-warehouse mr-1"></i>
-            {messages.LABEL_HALLS_DIRECT}
-          </label>
-          {#if crossAreaHalls.length > 0}
-            <select
-              id="department-direct-halls"
-              name="directHallIds"
-              multiple
-              class="multi-select"
-              bind:value={formDirectHallIds}
-            >
-              {#each crossAreaHalls as hall (hall.id)}
-                <option value={hall.id}>{hall.name}</option>
-              {/each}
-            </select>
-          {:else}
-            <p class="form-field__message text-(--color-text-secondary)">
-              {messages.NO_DIRECT_HALLS_AVAILABLE}
-            </p>
           {/if}
-          <span class="form-field__message text-(--color-text-secondary)">
-            <i class="fas fa-info-circle mr-1"></i>
-            {messages.HALLS_HINT_DIRECT}
-          </span>
         </div>
 
         {#if isEditMode}

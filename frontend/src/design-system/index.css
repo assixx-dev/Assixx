@@ -22,8 +22,11 @@
  */
 
 /* ========== MATERIAL SYMBOLS ========== */
-/* Font + CSS class are automatically loaded via Google Fonts (vite.config.js)
- * No additional CSS needed - Google provides the .material-symbols-outlined class */
+/* Self-hosted via @fontsource/material-symbols-outlined (npm), imported from
+ * tokens/fonts.css. The .material-symbols-outlined utility class is recreated
+ * in tokens/fonts.css (fontsource ships @font-face only, not the class).
+ * See LG München I 2022 (3 O 17493/20) for the DSGVO rationale.
+ */
 
 /* ========== DESIGN TOKENS ========== */
 /* Single source of truth for all design values */

@@ -5,7 +5,6 @@
 import { STATUS_BADGE_CLASSES, STATUS_LABELS, FORM_DEFAULTS } from './constants';
 
 import type {
-  AdminUser,
   Area,
   Department,
   DepartmentHallEntry,
@@ -57,56 +56,41 @@ export function getSelectedAreaName(areaId: number | null, areas: Area[]): strin
   return area?.name ?? 'Keine Zuordnung';
 }
 
-/** Get selected lead name for dropdown trigger */
-export function getSelectedLeadName(leadId: number | null, leads: AdminUser[]): string {
-  if (leadId === null) return 'Kein Leiter';
-  const lead = leads.find((l) => l.id === leadId);
-  if (!lead) return 'Kein Leiter';
-  const roleLabel = lead.role === 'root' ? '(Root)' : '(Admin)';
-  return `${lead.firstName} ${lead.lastName} ${roleLabel}`;
-}
-
 // =============================================================================
 // FORM HELPERS
 // =============================================================================
 
-/** Get hall count display text */
-export function getHallCountText(count: number, hallLabel: string): string {
-  return `${count} ${hallLabel}`;
+/** Get hall display text — replaces previous count-based version (1:1 model). */
+export function getHallDisplayText(hall: DepartmentHallEntry | null | undefined): string {
+  return hall?.name ?? '— keine Zuordnung —';
 }
 
 /**
- * Build tooltip text for hall badge: one hall name per line, annotated with
- * its source ("Bereich" for inherited, "direkt" for cross-area junction).
+ * Build tooltip text for hall badge — single hall (1:1 model after migration
+ * 20260505221345432_simplify-department-hall-1to1).
  */
-export function getHallTooltip(halls: DepartmentHallEntry[]): string {
-  if (halls.length === 0) return 'Keine zugeordnet';
-  return halls.map((h) => `${h.name} (${h.source === 'area' ? 'Bereich' : 'direkt'})`).join('\n');
+export function getHallTooltip(hall: DepartmentHallEntry | null | undefined): string {
+  return hall?.name ?? 'Keine zugeordnet';
 }
 
-/** Populate form from department data (for edit mode).
- * Only cross-area ("direct") halls are form-editable — area-inherited halls
- * are read-only and displayed separately. See DepartmentModal Section 1/2 UX.
- */
+/** Populate form from department data (for edit mode). 1:1 hall model. */
 export function populateFormFromDepartment(department: Department): {
   name: string;
   description: string;
   areaId: number | null;
   departmentLeadId: number | null;
   departmentDeputyLeadId: number | null;
-  directHallIds: number[];
+  hallId: number | null;
   isActive: FormIsActiveStatus;
 } {
-  const directHallIds = (department.halls ?? [])
-    .filter((h) => h.source === 'direct')
-    .map((h) => h.id);
+  const hallId = department.hall?.id ?? department.hallId ?? null;
   return {
     name: department.name,
     description: department.description ?? '',
     areaId: department.areaId ?? null,
     departmentLeadId: department.departmentLeadId ?? null,
     departmentDeputyLeadId: department.departmentDeputyLeadId ?? null,
-    directHallIds,
+    hallId,
     isActive: department.isActive === 4 ? 0 : department.isActive,
   };
 }

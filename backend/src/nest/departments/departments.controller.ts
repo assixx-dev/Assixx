@@ -36,10 +36,10 @@ import type {
 } from './departments.service.js';
 import { DepartmentsService } from './departments.service.js';
 import {
-  AssignHallsToDepartmentDto,
   CreateDepartmentDto,
   DeleteDepartmentQueryDto,
   ListDepartmentsQueryDto,
+  SetDepartmentHallDto,
   UpdateDepartmentDto,
 } from './dto/index.js';
 
@@ -136,23 +136,23 @@ export class DepartmentsController {
   }
 
   /**
-   * POST /departments/:id/halls
-   * Assign halls to a department (admin only)
+   * PUT /departments/:id/hall
+   * Set the (single) hall for a department.
+   *
+   * Migration 20260505221345432 simplified the M:N junction (department_halls)
+   * to a 1:1 column (departments.hall_id). The DB trigger
+   * trg_enforce_dept_hall_area_match guarantees halls.area_id == departments.area_id.
+   * Pass `{ hallId: null }` to clear the assignment.
    */
-  @Post(':id/halls')
+  @Put(':id/hall')
   @Roles('admin', 'root')
-  async assignHalls(
+  async setDepartmentHall(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: AssignHallsToDepartmentDto,
+    @Body() dto: SetDepartmentHallDto,
     @CurrentUser() user: NestAuthUser,
     @TenantId() tenantId: number,
   ): Promise<MessageResponse> {
-    return await this.departmentsService.assignHallsToDepartment(
-      id,
-      dto.hallIds,
-      tenantId,
-      user.id,
-    );
+    return await this.departmentsService.setDepartmentHall(id, dto.hallId, tenantId, user.id);
   }
 
   /**

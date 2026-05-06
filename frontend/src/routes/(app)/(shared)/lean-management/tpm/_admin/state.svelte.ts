@@ -1,98 +1,17 @@
 // =============================================================================
-// TPM - COMPOSED STATE (Svelte 5 Runes)
+// TPM ADMIN STATE — STUBBED (§D14/§D19)
 // =============================================================================
+//
+// Phase 4.11b (2026-05-06): the URL-state migration on `/lean-management/tpm`
+// moved every reactive concern (currentPage, statusFilter, searchQuery, ...)
+// into URL state. Modal state (delete confirmation) moved into the page
+// component as local `$state`. The composed `tpmState` singleton + its data /
+// UI sub-modules are no longer reachable from production code.
+//
+// Per §D19 the file is stubbed instead of deleted (harness blocks `rm`).
+// User follow-up: `git rm frontend/src/routes/(app)/(shared)/lean-management/
+// tpm/_admin/{state.svelte.ts,state-data.svelte.ts,state-ui.svelte.ts}`.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Spec Deviations" D14, D19
 
-import { createDataState } from './state-data.svelte';
-import { createUIState } from './state-ui.svelte';
-
-import type { PlanStatusFilter, TpmPlan } from './types';
-
-/**
- * TPM State Factory
- * Composes data and UI state modules into a unified API
- */
-// eslint-disable-next-line max-lines-per-function -- Facade pattern: composing sub-modules into unified API. Actual reactive logic is in sub-modules.
-function createTpmState() {
-  const data = createDataState();
-  const ui = createUIState();
-
-  // Modal helpers
-  const openDeleteModal = (plan: TpmPlan) => {
-    ui.setDeletePlanUuid(plan.uuid);
-    ui.setDeletePlanName(plan.name);
-    ui.setShowDeleteModal(true);
-  };
-  const closeDeleteModal = () => {
-    ui.setShowDeleteModal(false);
-    ui.setDeletePlanUuid(null);
-    ui.setDeletePlanName('');
-  };
-
-  return {
-    // Data
-    get plans() {
-      return data.plans;
-    },
-    get cards() {
-      return data.cards;
-    },
-    get colors() {
-      return data.colors;
-    },
-    get totalPlans() {
-      return data.totalPlans;
-    },
-    get currentPage() {
-      return data.currentPage;
-    },
-    setPlans: data.setPlans,
-    setCards: data.setCards,
-    setColors: data.setColors,
-    setTotalPlans: data.setTotalPlans,
-    setCurrentPage: data.setCurrentPage,
-
-    // UI
-    get loading() {
-      return ui.loading;
-    },
-    get error() {
-      return ui.error;
-    },
-    get statusFilter() {
-      return ui.statusFilter;
-    },
-    get searchQuery() {
-      return ui.searchQuery;
-    },
-    get searchOpen() {
-      return ui.searchOpen;
-    },
-    get showDeleteModal() {
-      return ui.showDeleteModal;
-    },
-    get deletePlanUuid() {
-      return ui.deletePlanUuid;
-    },
-    get deletePlanName() {
-      return ui.deletePlanName;
-    },
-    get submitting() {
-      return ui.submitting;
-    },
-    setLoading: ui.setLoading,
-    setError: ui.setError,
-    setStatusFilter: (v: PlanStatusFilter) => {
-      ui.setStatusFilter(v);
-    },
-    setSearchQuery: ui.setSearchQuery,
-    setSearchOpen: ui.setSearchOpen,
-    setSubmitting: ui.setSubmitting,
-
-    // Modal methods
-    openDeleteModal,
-    closeDeleteModal,
-  };
-}
-
-/** Singleton export */
-export const tpmState = createTpmState();
+export {};

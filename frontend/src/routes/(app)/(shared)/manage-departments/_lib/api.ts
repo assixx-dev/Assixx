@@ -4,7 +4,6 @@
 
 import { getApiClient } from '$lib/utils/api-client';
 import { extractArray, extractId } from '$lib/utils/api-response';
-import { buildLoginUrl } from '$lib/utils/build-apex-url';
 import { createLogger } from '$lib/utils/logger';
 import { handleSessionExpired, isSessionExpiredError } from '$lib/utils/session-expired.js';
 
@@ -67,24 +66,17 @@ function isDependencyError(parsed: ParsedApiError): boolean {
   );
 }
 
-/**
- * Check session and redirect if invalid
- */
-export function checkSession(): boolean {
-  const token = localStorage.getItem('accessToken');
-  const userRole = localStorage.getItem('userRole');
-
-  if (token === null || (userRole !== 'root' && userRole !== 'admin')) {
-    // ADR-050 Amendment 2026-04-22: cross-origin hard-nav to apex login.
-    window.location.href = buildLoginUrl('session-expired');
-    return false;
-  }
-  return true;
-}
-
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
+// NOTE: previous `checkSession()` (removed 2026-05-06) probed
+// `localStorage.getItem('accessToken')` and `localStorage.getItem('userRole')`,
+// but per ADR-046 the access-token is HttpOnly cookie (never in localStorage)
+// and `userRole` is a non-HttpOnly cookie (also not in localStorage). The
+// function had zero callers and would have returned false on every call —
+// hard-redirecting to apex `/login?session=expired` if it were ever invoked.
+// Auth handling is centralised in `apiClient` (401 + refresh + apex-redirect
+// cascade). See ADR-005 (auth strategy) + ADR-046 (cookie shape).
 
 /**
  * Build dependency message from details using dynamic labels
@@ -209,15 +201,18 @@ export async function loadHalls(): Promise<{
 }
 
 /**
- * Assign halls to a department
+ * Set the (single) hall for a department, or clear it (hallId=null).
+ *
+ * After migration 20260505221345432_simplify-department-hall-1to1, the M:N
+ * `department_halls` junction was replaced with a single `departments.hall_id`
+ * column. The DB trigger trg_enforce_dept_hall_area_match guarantees the
+ * hall's area matches the department's area.
  */
-export async function assignHallsToDepartment(
+export async function setDepartmentHall(
   departmentId: number,
-  hallIds: number[],
+  hallId: number | null,
 ): Promise<void> {
-  await apiClient.post(API_ENDPOINTS.departmentHalls(departmentId), {
-    hallIds,
-  });
+  await apiClient.put(API_ENDPOINTS.departmentHall(departmentId), { hallId });
 }
 
 /**

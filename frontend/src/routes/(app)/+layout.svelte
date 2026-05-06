@@ -650,7 +650,6 @@
     cursor: default;
     border: none;
     background: color-mix(in oklch, var(--color-black) 50%, transparent);
-    backdrop-filter: blur(4px);
     padding: 0;
     width: 100%;
     height: 100%;

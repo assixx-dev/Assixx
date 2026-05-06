@@ -32,7 +32,11 @@ function createMockDb() {
 function createMockDocumentsService() {
   return {
     createDocument: vi.fn().mockResolvedValue({ id: 1, filename: 'test.pdf' }),
-    listDocuments: vi.fn().mockResolvedValue({ documents: [] }),
+    // §D18 (2026-05-06): wrapper key renamed `documents` → `items`.
+    listDocuments: vi.fn().mockResolvedValue({
+      items: [],
+      pagination: { page: 1, limit: 100, total: 0, totalPages: 0 },
+    }),
     getDocumentContent: vi.fn().mockResolvedValue({
       content: Buffer.from('data'),
       originalName: 'test.pdf',
@@ -107,6 +111,9 @@ describe('BlackboardAttachmentsService', () => {
         isActive: 1,
         page: 1,
         limit: 100,
+        // §D18 (2026-05-06): `sort` is required on the DTO type — internal
+        // cross-service callers must pass it explicitly (Zod default is runtime).
+        sort: 'newest',
       });
     });
   });

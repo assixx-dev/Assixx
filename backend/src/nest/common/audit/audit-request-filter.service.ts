@@ -6,7 +6,7 @@
  *
  * @see ADR-009 Central Audit Logging
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 
 import type { NestAuthUser } from '../interfaces/auth.interface.js';
 import {
@@ -17,21 +17,41 @@ import {
 import { isCurrentUserEndpoint, shouldSkipGetRequest } from './audit.helpers.js';
 
 @Injectable()
-export class AuditRequestFilterService {
+export class AuditRequestFilterService implements OnModuleDestroy {
   /**
    * In-memory cache to throttle repeated calls.
    * Key: `${userId}-${endpoint}`, Value: timestamp of last log
    */
   private readonly recentLogs = new Map<string, number>();
 
+  /**
+   * Handle for the periodic recentLogs cleanup interval. Captured so
+   * onModuleDestroy can clearInterval it on shutdown — without this, the
+   * timer keeps the Node event loop alive past app teardown and accumulates
+   * across hot-reloads / module re-instantiation in tests.
+   * AUDIT_MEMORY_LEAKS.md step 3 (2026-05-05).
+   */
+  private readonly cleanupInterval: ReturnType<typeof setInterval>;
+
   constructor() {
     // Clean up old entries every 5 minutes to prevent memory leak
-    setInterval(
+    this.cleanupInterval = setInterval(
       () => {
         this.cleanupRecentLogs();
       },
       5 * 60 * 1000,
     );
+  }
+
+  /**
+   * NestJS lifecycle hook — release the cleanup interval and throttle cache
+   * so the process can exit cleanly (ADR-009 audit throttling has no shutdown
+   * behaviour to preserve; the cache is purely runtime noise reduction).
+   * AUDIT_MEMORY_LEAKS.md step 3 (2026-05-05).
+   */
+  onModuleDestroy(): void {
+    clearInterval(this.cleanupInterval);
+    this.recentLogs.clear();
   }
 
   /**

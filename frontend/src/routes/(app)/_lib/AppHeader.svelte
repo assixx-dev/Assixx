@@ -286,7 +286,6 @@
     border: none;
     border-radius: 0;
     background: transparent;
-    backdrop-filter: none;
     padding: 0.2rem 0.5rem;
   }
 

@@ -4,7 +4,7 @@
 
 import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
 
-import type { KvpStatus, KvpPriority, OrgLevel, KvpFilter } from './types';
+import type { KvpStatus, KvpPriority, OrgLevel } from './types';
 
 /**
  * API endpoints
@@ -83,13 +83,29 @@ export const PRIORITY_TEXT: Record<KvpPriority, string> = {
   urgent: 'Dringend',
 } as const;
 
+/**
+ * View-toggle value enum (Phase 4.5b URL contract).
+ *
+ * Decomposes into URL primitives at navigation time:
+ *   'all'        → no orgLevel, no mineOnly, status≠archived
+ *   'mine'       → ?mineOnly=true
+ *   'team'       → ?orgLevel=team
+ *   'department' → ?orgLevel=department
+ *   'company'    → ?orgLevel=company
+ *   'archived'   → ?status=archived
+ *
+ * Pre-Phase-4.5b values dropped per masterplan §D9 / Q3 sign-off:
+ *   - 'asset'  — backend `OrgLevelSchema` has no `'asset'` member.
+ *   - 'manage' — no backend equivalent.
+ */
+export type FilterToggleValue = 'all' | 'mine' | 'team' | 'department' | 'company' | 'archived';
+
 /** Filter option shape */
 interface FilterOption {
-  readonly value: KvpFilter;
+  readonly value: FilterToggleValue;
   readonly label: string;
   readonly icon: string;
   readonly title: string;
-  readonly showBadge: boolean;
 }
 
 /** Static filter options (no hierarchy labels needed) */
@@ -99,21 +115,18 @@ const STATIC_FILTER_OPTIONS: FilterOption[] = [
     label: 'Alle',
     icon: 'fa-list',
     title: 'Alle Vorschläge',
-    showBadge: true,
   },
   {
     value: 'mine',
     label: 'Meine',
     icon: 'fa-user',
     title: 'Meine Vorschläge',
-    showBadge: true,
   },
   {
     value: 'team',
     label: 'Team',
     icon: 'fa-users',
     title: 'Team Vorschläge',
-    showBadge: true,
   },
 ];
 
@@ -124,21 +137,12 @@ const STATIC_FILTER_OPTIONS_TAIL: FilterOption[] = [
     label: 'Firmenweit',
     icon: 'fa-globe',
     title: 'Firmenweite Vorschläge',
-    showBadge: true,
-  },
-  {
-    value: 'manage',
-    label: 'Verwalten',
-    icon: 'fa-tasks',
-    title: 'Verwaltung',
-    showBadge: false,
   },
   {
     value: 'archived',
     label: 'Archiv',
     icon: 'fa-archive',
     title: 'Archivierte Vorschläge',
-    showBadge: true,
   },
 ];
 
@@ -147,18 +151,10 @@ export function createFilterOptions(labels: HierarchyLabels): readonly FilterOpt
   return [
     ...STATIC_FILTER_OPTIONS,
     {
-      value: 'asset',
-      label: labels.asset,
-      icon: 'fa-cog',
-      title: `${labels.asset}-Vorschläge`,
-      showBadge: true,
-    },
-    {
       value: 'department',
       label: labels.department,
       icon: 'fa-building',
       title: `${labels.department}-Vorschläge`,
-      showBadge: true,
     },
     ...STATIC_FILTER_OPTIONS_TAIL,
   ];
@@ -169,7 +165,13 @@ export const FILTER_OPTIONS: readonly FilterOption[] =
   createFilterOptions(DEFAULT_HIERARCHY_LABELS);
 
 /**
- * Status filter options for dropdown
+ * Status filter options for dropdown.
+ *
+ * Mirrors backend `StatusSchema` enum (`backend/src/nest/kvp/dto/
+ * query-suggestion.dto.ts:14`). Pre-Phase-4.5b had a `'restored'` option
+ * that the backend rejected as a query param (silent 400) — dropped per
+ * §D11. The empty `''` value encodes "Alle Status" (no filter); the
+ * `'archived'` value is also reachable via the view-toggle "Archiv" button.
  */
 export const STATUS_FILTER_OPTIONS = [
   { value: '', label: 'Alle Status' },
@@ -178,7 +180,7 @@ export const STATUS_FILTER_OPTIONS = [
   { value: 'approved', label: 'Genehmigt' },
   { value: 'implemented', label: 'Umgesetzt' },
   { value: 'rejected', label: 'Abgelehnt' },
-  { value: 'restored', label: 'Wiederhergestellt' },
+  { value: 'archived', label: 'Archiviert' },
 ] as const;
 
 /**

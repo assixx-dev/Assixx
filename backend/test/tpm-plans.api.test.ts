@@ -160,15 +160,54 @@ describe('TPM: List Plans', () => {
     expect(res.status).toBe(200);
   });
 
-  it('should return plans array', () => {
-    expect(Array.isArray(body.data.data)).toBe(true);
-    expect(body.data.data.length).toBeGreaterThanOrEqual(1);
+  // Phase 4.11a (§D21): ADR-007 canonical envelope — `body.data` IS the items array,
+  // `body.meta.pagination` carries the pagination block.
+  it('should return plans as ADR-007 canonical envelope (§D21)', () => {
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as JsonBody[]).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should return pagination meta', () => {
-    expect(body.data.total).toBeDefined();
-    expect(typeof body.data.total).toBe('number');
-    expect(body.data.page).toBe(1);
+  it('should return canonical pagination meta (§D21)', () => {
+    expect(body.meta).toBeDefined();
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag).toBeDefined();
+    expect(pag.page).toBe(1);
+    expect(pag.limit).toBe(10);
+    expect(typeof pag.total).toBe('number');
+    expect(typeof pag.totalPages).toBe('number');
+  });
+});
+
+// ---- seq: 3b -- List Plans page-2 boundary + totalPages math (§D21) ------------
+
+describe('TPM: List Plans — Canonical Envelope page=2 (§D21)', () => {
+  let res: Response;
+  let body: JsonBody;
+
+  beforeAll(async () => {
+    // §10c precedent: assert canonical envelope holds + totalPages math is correct
+    // when page is beyond available data (test tenant currently has 1 plan).
+    res = await fetch(`${BASE_URL}/tpm/plans?page=2&limit=10`, {
+      headers: authOnly(auth.authToken),
+    });
+    body = (await res.json()) as JsonBody;
+  });
+
+  it('should return 200 OK with canonical envelope on empty page', () => {
+    expect(res.status).toBe(200);
+    expect(Array.isArray(body.data)).toBe(true);
+  });
+
+  it('should echo requested page=2 limit=10 in meta.pagination', () => {
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag.page).toBe(2);
+    expect(pag.limit).toBe(10);
+  });
+
+  it('should compute totalPages = total === 0 ? 0 : ceil(total/limit) (§3.1 math)', () => {
+    const pag = body.meta.pagination as { total: number; limit: number; totalPages: number };
+    const expected = pag.total === 0 ? 0 : Math.ceil(pag.total / pag.limit);
+    expect(pag.totalPages).toBe(expected);
   });
 });
 
@@ -252,13 +291,16 @@ describe('TPM Approval: Verify approval request created', () => {
   });
 
   it('should have at least one TPM approval', () => {
-    const items = body.data?.items as JsonBody[] | undefined;
+    // Phase 4.3a (FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN, 2026-05-05): ResponseInterceptor
+    // lifts the service's `items[]` into `body.data` (bare array) and forwards `pagination`
+    // into `body.meta.pagination`. See approvals.service.ts §PaginatedApprovals comment.
+    const items = body.data as JsonBody[] | undefined;
     expect(items).toBeDefined();
     expect(items!.length).toBeGreaterThanOrEqual(1);
   });
 
   it('should reference the created plan as source', () => {
-    const items = body.data?.items as JsonBody[];
+    const items = body.data as JsonBody[];
     const tpmApproval = items.find(
       (a: JsonBody) => a.sourceUuid === planUuid && a.addonCode === 'tpm',
     );
@@ -268,7 +310,7 @@ describe('TPM Approval: Verify approval request created', () => {
   });
 
   it('should include plan name in approval title', () => {
-    const items = body.data?.items as JsonBody[];
+    const items = body.data as JsonBody[];
     const tpmApproval = items.find((a: JsonBody) => a.sourceUuid === planUuid);
     expect(tpmApproval!.title).toContain('TPM Plan:');
   });
@@ -309,7 +351,8 @@ describe('TPM Approval: Edit with pending — no duplicate (D3)', () => {
   });
 
   it('should still have only one pending TPM approval for this plan', () => {
-    const items = approvalsBody.data?.items as JsonBody[];
+    // Phase 4.3a envelope: `data` is the items array, pagination in `meta.pagination`.
+    const items = approvalsBody.data as JsonBody[];
     const tpmPending = items.filter(
       (a: JsonBody) => a.sourceUuid === planUuid && a.addonCode === 'tpm' && a.status === 'pending',
     );
@@ -335,7 +378,8 @@ describe('TPM Approval: approvalStatus in list plans', () => {
   });
 
   it('should include approvalStatus field on plans', () => {
-    const plans = body.data?.data as JsonBody[];
+    // §D21: top-level body.data is now the items array (ADR-007 canonical envelope).
+    const plans = body.data as JsonBody[];
     const plan = plans.find((p: JsonBody) => p.uuid === planUuid);
     expect(plan).toBeDefined();
     expect(plan!.approvalStatus).toBe('pending');
@@ -361,6 +405,124 @@ describe('TPM Approval: approvalStatus in single plan', () => {
     expect(body.data.approvalStatus).toBe('pending');
     expect(body.data.approvalDecisionNote).toBeNull();
     expect(body.data.approvalDecidedByName).toBeNull();
+  });
+});
+
+// ---- seq: 5e -- Plans Pagination (Step 5.1) -----------------------------------
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14c, 2026-05-06):
+// 4 mandated assertions per migrated endpoint mirroring KVP §14b precedent.
+// Search column: p.name single-column ILIKE (§D2 — tpm_maintenance_plans has
+// no description column). 22 = 2 × limit + 2 → totalPages >= 3 guarantees
+// structural cross-page hits. Each plan needs its own asset (plan unique
+// constraint per asset_id when active) — createAssets(22) returns the UUIDs.
+// Cleanup: DELETE each plan + deleteAssets(uuids) in afterAll.
+// Placed AFTER all seq:5x approval-list-fragile tests (seq:5a/5b query
+// /approvals, seq:5c queries /tpm/plans — default limit 20 would push the
+// original planUuid off page 1 once 22 seeds exist) and BEFORE seq:6
+// (Set Time Estimate, UUID-keyed and order-independent).
+describe('TPM: Plans Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededUuids: string[] = [];
+  const seededAssets: string[] = [];
+
+  beforeAll(async () => {
+    const assets = await createAssets(auth.authToken, seedCount);
+    seededAssets.push(...assets);
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/tpm/plans`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          assetUuid: assets[i],
+          name: `${tag}_${String(i).padStart(2, '0')}`,
+          baseWeekday: 1,
+          baseRepeatEvery: 1,
+          baseTime: '08:00',
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: plan ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededUuids.push(body.data.uuid as string);
+    }
+  });
+
+  afterAll(async () => {
+    for (const uuid of seededUuids) {
+      await fetch(`${BASE_URL}/tpm/plans/${uuid}`, {
+        method: 'DELETE',
+        headers: authOnly(auth.authToken),
+      });
+    }
+    if (seededAssets.length > 0) {
+      await deleteAssets(auth.authToken, seededAssets);
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/tpm/plans?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ name: string }>) {
+      expect(item.name).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${BASE_URL}/tpm/plans?search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${BASE_URL}/tpm/plans?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ name: string }>) {
+      expect(item.name).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(`${BASE_URL}/tpm/plans?search=${tag}&limit=100`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedUuids = (body.data as Array<{ uuid: string }>)
+      .map((d) => d.uuid)
+      .sort((a, b) => a.localeCompare(b));
+    const expectedUuids = [...seededUuids].sort((a, b) => a.localeCompare(b));
+    expect(returnedUuids).toEqual(expectedUuids);
   });
 });
 
@@ -532,14 +694,196 @@ describe('TPM: List Cards by Plan', () => {
     expect(res.status).toBe(200);
   });
 
-  it('should return cards array with at least 1 card', () => {
-    expect(Array.isArray(body.data.data)).toBe(true);
-    expect(body.data.data.length).toBeGreaterThanOrEqual(1);
+  // Phase 4.11a (§D21): ADR-007 canonical envelope.
+  it('should return cards as ADR-007 canonical envelope (§D21)', () => {
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as JsonBody[]).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should return pagination info', () => {
-    expect(body.data.total).toBeDefined();
-    expect(typeof body.data.total).toBe('number');
+  it('should return canonical pagination meta (§D21)', () => {
+    expect(body.meta).toBeDefined();
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag).toBeDefined();
+    expect(pag.page).toBe(1);
+    expect(pag.limit).toBe(20);
+    expect(typeof pag.total).toBe('number');
+    expect(typeof pag.totalPages).toBe('number');
+  });
+});
+
+// ---- seq: 10b -- List Cards page-2 boundary + totalPages math (§D21) -----------
+
+describe('TPM: List Cards — Canonical Envelope page=2 (§D21)', () => {
+  let res: Response;
+  let body: JsonBody;
+
+  beforeAll(async () => {
+    // Tests cross-module shape: this hits `/tpm/cards`, but the §D21 fix also covers
+    // the cross-controller `/tpm/plans/:uuid/board` route (asserted in TPM: Board Data).
+    res = await fetch(`${BASE_URL}/tpm/cards?planUuid=${planUuid}&page=2&limit=10`, {
+      headers: authOnly(auth.authToken),
+    });
+    body = (await res.json()) as JsonBody;
+  });
+
+  it('should return 200 OK with canonical envelope on empty page', () => {
+    expect(res.status).toBe(200);
+    expect(Array.isArray(body.data)).toBe(true);
+  });
+
+  it('should echo requested page=2 limit=10 in meta.pagination', () => {
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag.page).toBe(2);
+    expect(pag.limit).toBe(10);
+  });
+
+  it('should compute totalPages = total === 0 ? 0 : ceil(total/limit) (§3.1 math)', () => {
+    const pag = body.meta.pagination as { total: number; limit: number; totalPages: number };
+    const expected = pag.total === 0 ? 0 : Math.ceil(pag.total / pag.limit);
+    expect(pag.totalPages).toBe(expected);
+  });
+});
+
+// ---- seq: 10c -- Cards Pagination (Step 5.1) ----------------------------------
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14c, 2026-05-06):
+// 4 mandated assertions per migrated endpoint mirroring KVP §14b precedent.
+// Search column: c.title (tpm-cards.service.ts buildFilterClauses, §1.2a-B B-4).
+// Cards have unique constraint (plan_id + interval_type + card_role + title) —
+// distinct titles per seed avoid the constraint. /tpm/cards REQUIRES `planUuid`
+// query param (see seq:11 — 400 without it), so the search must be scoped to
+// the seed's own plan. Self-contained: own asset + plan → 22 cards → cleanup.
+// Placed AFTER seq:10b (existing canonical-envelope page=2 math test) and
+// BEFORE seq:11 (List Cards without filter → 400 contract).
+describe('TPM: Cards Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}_C`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededUuids: string[] = [];
+  const ownAsset: string[] = [];
+  let ownPlanUuid: string;
+
+  beforeAll(async () => {
+    const assets = await createAssets(auth.authToken, 1);
+    ownAsset.push(...assets);
+    const planRes = await fetch(`${BASE_URL}/tpm/plans`, {
+      method: 'POST',
+      headers: authHeaders(auth.authToken),
+      body: JSON.stringify({
+        assetUuid: assets[0],
+        name: `Cards Pagination Plan ${Date.now()}`,
+        baseWeekday: 1,
+        baseRepeatEvery: 1,
+        baseTime: '08:00',
+      }),
+    });
+    if (planRes.status !== 201) {
+      const text = await planRes.text();
+      throw new Error(`Cards pagination seed: plan failed ${planRes.status} — ${text}`);
+    }
+    const planBody = (await planRes.json()) as JsonBody;
+    ownPlanUuid = planBody.data.uuid as string;
+
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/tpm/cards`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          planUuid: ownPlanUuid,
+          cardRole: 'operator',
+          intervalType: 'weekly',
+          title: `${tag}_${String(i).padStart(2, '0')}`,
+          requiresApproval: false,
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Cards pagination seed: card ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededUuids.push(body.data.uuid as string);
+    }
+  });
+
+  afterAll(async () => {
+    for (const uuid of seededUuids) {
+      await fetch(`${BASE_URL}/tpm/cards/${uuid}`, {
+        method: 'DELETE',
+        headers: authOnly(auth.authToken),
+      });
+    }
+    await fetch(`${BASE_URL}/tpm/plans/${ownPlanUuid}`, {
+      method: 'DELETE',
+      headers: authOnly(auth.authToken),
+    });
+    if (ownAsset.length > 0) {
+      await deleteAssets(auth.authToken, ownAsset);
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(
+      `${BASE_URL}/tpm/cards?planUuid=${ownPlanUuid}&search=${tag}&page=2&limit=${limit}`,
+      { headers: authOnly(auth.authToken) },
+    );
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(
+      `${BASE_URL}/tpm/cards?planUuid=${ownPlanUuid}&search=${tag}&page=1&limit=${limit}`,
+      { headers: authOnly(auth.authToken) },
+    );
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(
+      `${BASE_URL}/tpm/cards?planUuid=${ownPlanUuid}&search=${tag}&page=2&limit=${limit}`,
+      { headers: authOnly(auth.authToken) },
+    );
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(
+      `${BASE_URL}/tpm/cards?planUuid=${ownPlanUuid}&search=${tag}&limit=100`,
+      { headers: authOnly(auth.authToken) },
+    );
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedUuids = (body.data as Array<{ uuid: string }>)
+      .map((d) => d.uuid)
+      .sort((a, b) => a.localeCompare(b));
+    const expectedUuids = [...seededUuids].sort((a, b) => a.localeCompare(b));
+    expect(returnedUuids).toEqual(expectedUuids);
   });
 });
 
@@ -631,14 +975,21 @@ describe('TPM: Board Data', () => {
     expect(res.status).toBe(200);
   });
 
-  it('should return cards array', () => {
-    expect(Array.isArray(body.data.data)).toBe(true);
-    expect(body.data.data.length).toBeGreaterThanOrEqual(1);
+  // Phase 4.11a (§D21): cross-module check — `/tpm/plans/:uuid/board` ALSO returns
+  // `PaginatedCards` (line 467 in tpm-plans.controller.ts calls listCardsForPlan).
+  // The single shape change in tpm-cards.service.ts:executePaginatedQuery covers this.
+  it('should return cards array via canonical envelope (§D21)', () => {
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as JsonBody[]).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should return pagination info', () => {
-    expect(body.data.total).toBeDefined();
-    expect(typeof body.data.total).toBe('number');
+  it('should return canonical pagination meta on cross-module route (§D21)', () => {
+    expect(body.meta).toBeDefined();
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag).toBeDefined();
+    expect(typeof pag.total).toBe('number');
+    expect(pag.page).toBe(1);
+    expect(pag.limit).toBe(50);
   });
 });
 

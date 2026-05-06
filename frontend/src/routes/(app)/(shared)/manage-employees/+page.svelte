@@ -1,11 +1,16 @@
 <script lang="ts">
   /**
-   * Manage Employees - Page Component
+   * Manage Employees - Page Component (Phase 4.1b URL-driven state)
    * @module manage-employees/+page
    *
-   * Level 3 SSR: $derived for SSR data, invalidateAll() after mutations.
+   * Mirrors the Phase-3 reference impl (`manage-dummies/+page.svelte`) per
+   * FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.1b. URL holds pagination +
+   * search + status-filter state — there is NO `$state` shadow of these.
+   * Mutations call `invalidateAll()` to retrigger the load on the same URL,
+   * so `?page=N`/`?search=...`/`?isActive=N` are preserved across mutations.
    */
   import { goto, invalidateAll } from '$app/navigation';
+  import { resolve } from '$app/paths';
 
   import AvailabilityModal from '$lib/availability/AvailabilityModal.svelte';
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
@@ -13,6 +18,7 @@
   import { showSuccessAlert, showErrorAlert, showWarningAlert } from '$lib/utils';
   import { ApiError, getApiClient, getApiErrorMessage } from '$lib/utils/api-client';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   const log = createLogger('ManageEmployeesPage');
 
@@ -31,8 +37,6 @@
   import DeleteModals from './_lib/DeleteModals.svelte';
   import EmployeeFormModal from './_lib/EmployeeFormModal.svelte';
   import EmployeeTableRow from './_lib/EmployeeTableRow.svelte';
-  import { applyAllFilters } from './_lib/filters';
-  import SearchResults from './_lib/SearchResults.svelte';
   import {
     populateFormFromEmployee,
     getDefaultFormValues,
@@ -41,25 +45,28 @@
     validateSaveEmployeeForm,
     validateAvailabilityForm,
     buildAvailabilityPayload,
-    getVisiblePages,
-    EMPLOYEES_PER_PAGE,
   } from './_lib/utils';
 
-  // Extracted Components
-
   import type { PageData } from './$types';
-  import type { StatusFilter, FormIsActiveStatus, AvailabilityStatus } from './_lib/types';
+  import type { FormIsActiveStatus, AvailabilityStatus } from './_lib/types';
 
-  // =============================================================================
-  // SSR DATA - Level 3: $derived from props (single source of truth)
-  // =============================================================================
+  // ============================================================================
+  // SSR DATA — URL is the single source of truth for page / search / status.
+  // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §4.1b: there is NO client `$state`
+  // shadow of these — every change goes through `goto()` → load re-run.
+  // ============================================================================
 
   const { data }: { data: PageData } = $props();
 
-  // SSR data via $derived - updates when invalidateAll() is called
-  const allEmployees = $derived(data.employees);
+  // SSR data via $derived — updates when invalidateAll() / goto() reruns load.
+  // `employees` already represents the current page slice (server-paginated).
+  const employees = $derived(data.employees);
   const allTeams = $derived(data.teams);
   const positionOptions = $derived(data.positionOptions);
+  const pagination = $derived(data.pagination);
+  const searchTerm = $derived(data.search);
+  // `number | 'all'` — numeric IS_ACTIVE codes, single conversion in load.
+  const statusFilter = $derived(data.statusFilter);
 
   // Hierarchy labels (propagated from layout)
   const labels = $derived(data.hierarchyLabels);
@@ -91,22 +98,14 @@
       (data.user.role === 'root' || (data.user.role === 'admin' && data.user.hasFullAccess)),
   );
 
-  // =============================================================================
-  // UI STATE - Filtering and form state (client-side only)
-  // =============================================================================
+  // ============================================================================
+  // CLIENT STATE — only modal open/close + form fields are local. Pagination,
+  // search, and status filter are URL-driven via the helpers below.
+  // ============================================================================
 
-  // Error state
+  // Error state (legacy — load function returns `permissionDenied` instead of
+  // throwing, so this block is rarely reached. Kept for forward-compat.)
   const error = $state<string | null>(null);
-
-  // Filter State
-  let currentStatusFilter = $state<StatusFilter>('active');
-  let currentSearchQuery = $state('');
-
-  // Pagination State (client-side, page slice over filteredEmployees)
-  let currentPage = $state(1);
-
-  // Search State
-  let searchOpen = $state(false);
 
   // Modal States
   let showEmployeeModal = $state(false);
@@ -150,42 +149,90 @@
   let passwordError = $state(false);
   let submitting = $state(false);
 
-  // =============================================================================
+  // Search input → URL debouncer. Local-only; URL is the authoritative state.
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const SEARCH_DEBOUNCE_MS = 300;
+
+  // ============================================================================
   // DERIVED VALUES
-  // =============================================================================
+  // ============================================================================
 
   const isEditMode = $derived(currentEditId !== null);
   const modalTitle = $derived(isEditMode ? messages.MODAL_TITLE_EDIT : messages.MODAL_TITLE_ADD);
 
-  // Derived: Filtered employees based on current filter/search state
-  const filteredEmployees = $derived(
-    applyAllFilters(allEmployees, currentStatusFilter, currentSearchQuery),
-  );
-
-  // Derived: Pagination — slice the filtered set into the current page.
-  // SearchResults dropdown still receives `filteredEmployees` (full set) so
-  // a user can jump to a hit on any page. Pagination only governs the table.
-  const totalPages = $derived(
-    Math.max(1, Math.ceil(filteredEmployees.length / EMPLOYEES_PER_PAGE)),
-  );
-  const paginatedEmployees = $derived(
-    filteredEmployees.slice(
-      (currentPage - 1) * EMPLOYEES_PER_PAGE,
-      currentPage * EMPLOYEES_PER_PAGE,
-    ),
-  );
-  const visiblePages = $derived(getVisiblePages(currentPage, totalPages));
-
-  // Derived: Current employee for availability modal
+  // Derived: Current employee for availability modal. If the user navigates
+  // pages while the modal is open, the employee may no longer be in the
+  // current page slice — `find` returns undefined → fallback to null.
   const availabilityEmployee = $derived(
     availabilityEmployeeId !== null ?
-      (allEmployees.find((e) => e.id === availabilityEmployeeId) ?? null)
+      (employees.find((e) => e.id === availabilityEmployeeId) ?? null)
     : null,
   );
 
-  // =============================================================================
+  // ============================================================================
+  // URL HELPERS — single source of truth for page/search/status
+  // ============================================================================
+
+  const BASE_PATH = '/manage-employees';
+
+  // Default status filter — must mirror `+page.server.ts` STATUS_FILTER default
+  // (currently `'1'`, IS_ACTIVE.ACTIVE). Stripping this value from the URL
+  // keeps the canonical first-page URL clean (`/manage-employees`) per ADR-058.
+  const DEFAULT_STATUS_FILTER = 1;
+
+  /**
+   * Build an href for a target page, preserving current search + status.
+   * `buildPaginatedHref` skips defaults (page=1 / search='' / undefined),
+   * so canonical first-page URLs stay clean (`/manage-employees`).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchTerm,
+        isActive: statusFilter === DEFAULT_STATUS_FILTER ? undefined : String(statusFilter),
+      }),
+    );
+  }
+
+  /**
+   * Navigate to a new filter/search state. Page resets to 1 (default —
+   * not emitted into the URL).
+   */
+  function navigateFilters(next: { search?: string; statusFilter?: number | 'all' }): void {
+    const nextSearch = next.search ?? searchTerm;
+    const nextStatus = next.statusFilter ?? statusFilter;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1
+        search: nextSearch,
+        isActive: nextStatus === DEFAULT_STATUS_FILTER ? undefined : String(nextStatus),
+      }),
+    );
+    void goto(href, { keepFocus: true });
+  }
+
+  function handleStatusToggle(value: number | 'all'): void {
+    navigateFilters({ statusFilter: value });
+  }
+
+  function handleSearchInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const term = input.value;
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      navigateFilters({ search: term });
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function clearSearch(): void {
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    navigateFilters({ search: '' });
+  }
+
+  // ============================================================================
   // API FUNCTIONS - Level 3: invalidateAll() after mutations
-  // =============================================================================
+  // ============================================================================
 
   async function saveEmployee(): Promise<void> {
     submitting = true;
@@ -239,6 +286,7 @@
       await syncTeamMemberships(result.id, formTeamIds, originalTeamIds, isEditMode);
 
       closeEmployeeModal();
+      // Retrigger SSR load on the SAME URL (preserves ?page / ?search / ?isActive).
       await invalidateAll();
 
       if (!isEditMode && result.uuid !== null) {
@@ -314,7 +362,7 @@
 
     try {
       await apiDeleteEmployee(idToDelete);
-      // Level 3: Trigger SSR refetch
+      // Level 3: Trigger SSR refetch on the same URL
       await invalidateAll();
       showSuccessAlert('Mitarbeiter wurde gelöscht');
     } catch (err: unknown) {
@@ -323,9 +371,9 @@
     }
   }
 
-  // =============================================================================
+  // ============================================================================
   // MODAL HANDLERS
-  // =============================================================================
+  // ============================================================================
 
   function openAddModal(): void {
     currentEditId = null;
@@ -334,7 +382,7 @@
   }
 
   function openEditModal(employeeId: number): void {
-    const employee = allEmployees.find((e) => e.id === employeeId);
+    const employee = employees.find((e) => e.id === employeeId);
     if (!employee) return;
 
     currentEditId = employeeId;
@@ -381,7 +429,7 @@
   // Availability Modal Handlers
   // NOTE: Modal is CREATE-only. PUT/UPDATE is on history page.
   function openAvailabilityModal(employeeId: number): void {
-    const employee = allEmployees.find((e) => e.id === employeeId);
+    const employee = employees.find((e) => e.id === employeeId);
     if (!employee) return;
 
     availabilityEmployeeId = employeeId;
@@ -472,49 +520,9 @@
     passwordError = false;
   }
 
-  // =============================================================================
-  // EVENT HANDLERS
-  // =============================================================================
-
-  function handleStatusToggle(status: StatusFilter): void {
-    currentStatusFilter = status;
-  }
-
-  function handleSearchInput(e: Event): void {
-    const input = e.target as HTMLInputElement;
-    currentSearchQuery = input.value;
-    searchOpen = currentSearchQuery.trim().length > 0;
-  }
-
-  function clearSearch(): void {
-    currentSearchQuery = '';
-    searchOpen = false;
-  }
-
-  // Reset to page 1 whenever filter set changes — prevents user landing on
-  // an empty page after narrowing search/status. Mount-fire is a no-op.
-  $effect(() => {
-    void currentStatusFilter;
-    void currentSearchQuery;
-    currentPage = 1;
-  });
-
-  // Client-side pagination handlers (no URL update — KISS, see utils.ts)
-  function goToPage(p: number): void {
-    if (p >= 1 && p <= totalPages) currentPage = p;
-  }
-  function handlePreviousPage(): void {
-    if (currentPage > 1) currentPage -= 1;
-  }
-  function handleNextPage(): void {
-    if (currentPage < totalPages) currentPage += 1;
-  }
-
-  function handleSearchResultClick(employeeId: number): void {
-    openEditModal(employeeId);
-    searchOpen = false;
-    currentSearchQuery = '';
-  }
+  // ============================================================================
+  // FORM VALIDATION HANDLERS
+  // ============================================================================
 
   function validateEmails(): void {
     emailError = !validateEmailMatch(formEmail, formEmailConfirm);
@@ -532,24 +540,6 @@
     e.preventDefault();
     void saveEmployee();
   }
-
-  // =============================================================================
-  // OUTSIDE CLICK HANDLER
-  // =============================================================================
-
-  $effect(() => {
-    if (searchOpen) {
-      const handleOutsideClick = (e: MouseEvent): void => {
-        const target = e.target as HTMLElement;
-        const el = document.querySelector('.search-input-wrapper');
-        if (el && !el.contains(target)) searchOpen = false;
-      };
-      document.addEventListener('click', handleOutsideClick, true);
-      return () => {
-        document.removeEventListener('click', handleOutsideClick, true);
-      };
-    }
-  });
 </script>
 
 <svelte:head>
@@ -571,7 +561,7 @@
         <div
           class="mt-6 flex flex-col items-stretch gap-4 md:flex-row md:items-center md:justify-between"
         >
-          <!-- Status Toggle Group -->
+          <!-- Status Toggle Group — numeric IS_ACTIVE codes (0/1/3 + 'all') -->
           <div
             class="toggle-group"
             id="employee-status-toggle"
@@ -579,10 +569,10 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={currentStatusFilter === 'active'}
+              class:active={statusFilter === 1}
               title="Aktive Mitarbeiter"
               onclick={() => {
-                handleStatusToggle('active');
+                handleStatusToggle(1);
               }}
             >
               <i class="fas fa-user-check"></i>
@@ -591,10 +581,10 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={currentStatusFilter === 'inactive'}
+              class:active={statusFilter === 0}
               title="Inaktive Mitarbeiter"
               onclick={() => {
-                handleStatusToggle('inactive');
+                handleStatusToggle(0);
               }}
             >
               <i class="fas fa-user-times"></i>
@@ -603,10 +593,10 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={currentStatusFilter === 'archived'}
+              class:active={statusFilter === 3}
               title="Archivierte Mitarbeiter"
               onclick={() => {
-                handleStatusToggle('archived');
+                handleStatusToggle(3);
               }}
             >
               <i class="fas fa-archive"></i>
@@ -615,7 +605,7 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={currentStatusFilter === 'all'}
+              class:active={statusFilter === 'all'}
               title="Alle Mitarbeiter"
               onclick={() => {
                 handleStatusToggle('all');
@@ -626,46 +616,33 @@
             </button>
           </div>
 
-          <!-- Search Input -->
-          <div
-            class="search-input-wrapper max-w-80"
-            class:search-input-wrapper--open={searchOpen}
-          >
-            <div
-              class="search-input"
-              id="employee-search-container"
-            >
-              <i class="search-input__icon fas fa-search"></i>
-              <input
-                type="search"
-                id="employee-search"
-                class="search-input__field"
-                placeholder={messages.SEARCH_PLACEHOLDER}
-                autocomplete="off"
-                value={currentSearchQuery}
-                oninput={handleSearchInput}
-              />
-              <button
-                class="search-input__clear"
-                class:search-input__clear--visible={currentSearchQuery.length > 0}
-                type="button"
-                aria-label="Suche löschen"
-                onclick={clearSearch}
-              >
-                <i class="fas fa-times"></i>
-              </button>
-            </div>
-            <SearchResults
-              searchQuery={currentSearchQuery}
-              employees={filteredEmployees}
-              onresultclick={handleSearchResultClick}
+          <!-- Search Input — debounced URL update (300 ms), URL-driven -->
+          <div class="search-input max-w-80">
+            <i class="search-input__icon fas fa-search"></i>
+            <input
+              type="search"
+              id="employee-search"
+              class="search-input__field"
+              placeholder={messages.SEARCH_PLACEHOLDER}
+              autocomplete="off"
+              value={searchTerm}
+              oninput={handleSearchInput}
             />
+            <button
+              class="search-input__clear"
+              class:search-input__clear--visible={searchTerm.length > 0}
+              type="button"
+              aria-label="Suche löschen"
+              onclick={clearSearch}
+            >
+              <i class="fas fa-times"></i>
+            </button>
           </div>
         </div>
       </div>
 
       <div class="card__body">
-        {#if error}
+        {#if error !== null}
           <div class="p-6 text-center">
             <i class="fas fa-exclamation-triangle mb-4 text-4xl text-(--color-danger)"></i>
             <p class="text-(--color-text-secondary)">{error}</p>
@@ -677,7 +654,7 @@
               Erneut versuchen
             </button>
           </div>
-        {:else if filteredEmployees.length === 0}
+        {:else if employees.length === 0}
           <div
             id="employees-empty"
             class="empty-state"
@@ -702,7 +679,7 @@
           <div id="employees-table-content">
             <div class="table-responsive">
               <table
-                class="data-table data-table--hover data-table--striped"
+                class="data-table data-table--hover data-table--striped data-table--actions-hover"
                 id="employees-table"
               >
                 <thead>
@@ -724,7 +701,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {#each paginatedEmployees as employee (employee.id)}
+                  {#each employees as employee (employee.id)}
                     <EmployeeTableRow
                       {employee}
                       {labels}
@@ -740,48 +717,73 @@
                 </tbody>
               </table>
             </div>
-            {#if totalPages > 1}
+
+            <!-- Pagination — URL-driven, anchor-based for native back/forward + right-click support -->
+            {#if pagination.totalPages > 1}
               <nav
                 class="pagination"
                 id="employees-pagination"
+                aria-label="Seitennavigation"
               >
-                <button
-                  type="button"
-                  class="pagination__btn pagination__btn--prev"
-                  onclick={handlePreviousPage}
-                  disabled={currentPage === 1}
-                >
-                  <i class="fas fa-chevron-left"></i> Zurück
-                </button>
+                {#if pagination.hasPrev}
+                  <a
+                    class="pagination__btn pagination__btn--prev"
+                    href={pageHref(pagination.page - 1)}
+                    rel="prev"
+                  >
+                    <i class="fas fa-chevron-left"></i> Zurück
+                  </a>
+                {:else}
+                  <button
+                    type="button"
+                    class="pagination__btn pagination__btn--prev"
+                    disabled
+                  >
+                    <i class="fas fa-chevron-left"></i> Zurück
+                  </button>
+                {/if}
+
                 <div class="pagination__pages">
-                  {#each visiblePages as page, i (i)}
-                    {#if page.type === 'ellipsis'}
-                      <span class="pagination__ellipsis">...</span>
-                    {:else if page.type === 'page'}
-                      <button
-                        type="button"
-                        class="pagination__page"
-                        class:pagination__page--active={page.active}
-                        onclick={() => {
-                          goToPage(page.value);
-                        }}
+                  {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
+                    {#if page === pagination.page}
+                      <span
+                        class="pagination__page pagination__page--active"
+                        aria-current="page"
                       >
-                        {page.value}
-                      </button>
+                        {page}
+                      </span>
+                    {:else}
+                      <a
+                        class="pagination__page"
+                        href={pageHref(page)}
+                      >
+                        {page}
+                      </a>
                     {/if}
                   {/each}
                 </div>
+
                 <span class="pagination__info">
-                  Seite {currentPage} von {totalPages} ({filteredEmployees.length} Einträge)
+                  Seite {pagination.page} von {pagination.totalPages} ({pagination.total} Einträge)
                 </span>
-                <button
-                  type="button"
-                  class="pagination__btn pagination__btn--next"
-                  onclick={handleNextPage}
-                  disabled={currentPage === totalPages}
-                >
-                  Weiter <i class="fas fa-chevron-right"></i>
-                </button>
+
+                {#if pagination.hasNext}
+                  <a
+                    class="pagination__btn pagination__btn--next"
+                    href={pageHref(pagination.page + 1)}
+                    rel="next"
+                  >
+                    Weiter <i class="fas fa-chevron-right"></i>
+                  </a>
+                {:else}
+                  <button
+                    type="button"
+                    class="pagination__btn pagination__btn--next"
+                    disabled
+                  >
+                    Weiter <i class="fas fa-chevron-right"></i>
+                  </button>
+                {/if}
               </nav>
             {/if}
           </div>
@@ -834,7 +836,7 @@
     onupgrade={canUpgrade ? upgradeEmployee : undefined}
     resetLinkTarget={isEditMode && currentEditId !== null && data.user?.role === 'root' ?
       (() => {
-        const e = allEmployees.find((x) => x.id === currentEditId);
+        const e = employees.find((x) => x.id === currentEditId);
         return e !== undefined ? { id: e.id, email: e.email } : undefined;
       })()
     : undefined}

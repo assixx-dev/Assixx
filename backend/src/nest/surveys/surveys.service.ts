@@ -43,6 +43,28 @@ import type {
 
 const MSG_SURVEY_NOT_FOUND = 'Survey not found';
 
+/**
+ * Phase 4.10a (2026-05-06) — §D15 broken-by-shape rebuild.
+ *
+ * Surveys list response shape consumed by the response interceptor (ADR-007),
+ * which extracts `items` to top-level `data` and `pagination` to `meta.pagination`.
+ * Mirrors PaginatedWorkOrders (work-orders.service.ts:83) introduced in Phase 4.7a.
+ *
+ * `items` are loosely typed as `Record<string, unknown>` because each row is
+ * `transformSurveyWithMetadata(s) + { canManage }` — a heterogeneous payload
+ * that does not have a stable typed contract. A typed list-item interface
+ * would be a larger refactor (out of scope for §D15 envelope rebuild).
+ */
+export interface PaginatedSurveys {
+  items: Record<string, unknown>[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
 @Injectable()
 export class SurveysService {
   private readonly logger = new Logger(SurveysService.name);
@@ -57,18 +79,33 @@ export class SurveysService {
     private readonly statisticsService: SurveyStatisticsService,
   ) {}
 
-  /** Lists surveys with visibility filtering and canManage flags */
+  /**
+   * Lists surveys with visibility filtering, canManage flags, and pagination metadata.
+   *
+   * Phase 4.10a (2026-05-06): rebuild from `Promise<unknown[]>` → `Promise<PaginatedSurveys>`
+   * to close the §D15 broken-by-shape gap. Backend accepted `?page`/`?limit` since
+   * Stage B 2026-05-02 but dropped the total count, so the FE could never compute
+   * `totalPages`. Mirrors the work-orders 4.7a fix and the dummy-users 3.1 / KVP 4.5a
+   * `totalPages: 0 when total === 0` precedent.
+   *
+   * Count + fetch run in parallel via Promise.all — both queries share the same
+   * visibility/management WHERE clause (PG plan-cached), so the second round-trip
+   * is effectively free.
+   */
   async listSurveys(
     tenantId: number,
     userId: number,
     userRole: string,
     query: {
       status?: string | undefined;
+      // Phase 1.2a-B (2026-05-01): server-side title/description ILIKE search.
+      // Undefined/empty ⇒ no WHERE clause (backwards-compat invariant).
+      search?: string | undefined;
       page?: number | undefined;
       limit?: number | undefined;
       manage?: boolean | undefined;
     },
-  ): Promise<unknown[]> {
+  ): Promise<PaginatedSurveys> {
     this.logger.debug(`Listing surveys for tenant ${tenantId}, user ${userId}`);
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
@@ -80,27 +117,49 @@ export class SurveysService {
       userRole,
     );
 
-    const surveys = await this.accessService.fetchSurveysByAccessLevel(
-      tenantId,
-      userId,
-      query.status,
-      limit,
-      offset,
-      hasUnrestrictedAccess,
-      query.manage === true,
-    );
+    const isManageMode = query.manage === true;
+    const [surveys, total] = await Promise.all([
+      this.accessService.fetchSurveysByAccessLevel(
+        tenantId,
+        userId,
+        query.status,
+        limit,
+        offset,
+        hasUnrestrictedAccess,
+        isManageMode,
+        query.search,
+      ),
+      this.accessService.countSurveysByAccessLevel(
+        tenantId,
+        userId,
+        query.status,
+        hasUnrestrictedAccess,
+        isManageMode,
+        query.search,
+      ),
+    ]);
     await this.accessService.attachAssignmentsToSurveys(surveys, tenantId);
 
     const surveyIds = surveys.map((s: DbSurvey) => s.id);
     const manageableIds =
-      hasUnrestrictedAccess || query.manage === true ?
+      hasUnrestrictedAccess || isManageMode ?
         new Set(surveyIds)
       : await this.accessService.getManageableSurveyIds(surveyIds, tenantId, userId);
 
-    return surveys.map((s: DbSurvey) => ({
+    const items = surveys.map((s: DbSurvey) => ({
       ...transformSurveyWithMetadata(s),
       canManage: manageableIds.has(s.id),
     }));
+
+    // totalPages: 0 when total === 0 (avoids Math.ceil(0/N) === 0 ambiguity vs.
+    // a "1 empty page" reading). Mirrors Phase 3.1 dummy-users + Phase 4.5a KVP
+    // + Phase 4.7a work-orders precedent.
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+
+    return {
+      items,
+      pagination: { page, limit, total, totalPages },
+    };
   }
 
   /** Gets a single survey by numeric ID or UUID */

@@ -6,64 +6,27 @@ import { getApiClient } from '$lib/utils/api-client';
 import { extractArray } from '$lib/utils/api-response';
 import { createLogger } from '$lib/utils/logger';
 
-import type {
-  CreateDummyPayload,
-  DummyUser,
-  PaginatedDummies,
-  Team,
-  UpdateDummyPayload,
-} from './types';
+import type { CreateDummyPayload, DummyUser, Team, UpdateDummyPayload } from './types';
 
 const log = createLogger('DummyUsersApi');
 const apiClient = getApiClient();
 
 // =============================================================================
-// HELPER FUNCTIONS
-// =============================================================================
-
-/** Type-safe extraction of paginated dummies from API response */
-function extractPaginated(result: unknown): PaginatedDummies {
-  if (result === null || typeof result !== 'object') {
-    return { items: [], total: 0, page: 1, pageSize: 20 };
-  }
-  const obj = result as Record<string, unknown>;
-  const items = Array.isArray(obj.items) ? (obj.items as DummyUser[]) : [];
-  return {
-    items,
-    total: typeof obj.total === 'number' ? obj.total : 0,
-    page: typeof obj.page === 'number' ? obj.page : 1,
-    pageSize: typeof obj.pageSize === 'number' ? obj.pageSize : 20,
-  };
-}
-
-// =============================================================================
 // CORE CRUD
 // =============================================================================
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.2 (2026-05-04):
+// Listing dummies is now URL-driven via the server load function
+// (`+page.server.ts` calls `apiFetchPaginated<DummyUser>`). The legacy
+// client-side `listDummies()` + `extractPaginated()` helpers were removed
+// because every navigation/filter/search change now goes through SvelteKit's
+// `goto()` → `load` re-run pipeline, and mutations use `invalidateAll()` to
+// retrigger the same load. This file keeps only the create/get/update/delete
+// helpers used by the page's mutation flow.
 
 /** Create a new dummy user */
 export async function createDummy(payload: CreateDummyPayload): Promise<DummyUser> {
   return await apiClient.post<DummyUser>('/dummy-users', payload);
-}
-
-/** Fetch paginated list of dummy users */
-export async function listDummies(
-  page = 1,
-  limit = 20,
-  filters: { isActive?: number | 'all'; search?: string } = {},
-): Promise<PaginatedDummies> {
-  const params = new URLSearchParams();
-  params.set('page', String(page));
-  params.set('limit', String(limit));
-
-  if (filters.isActive !== undefined && filters.isActive !== 'all') {
-    params.set('isActive', String(filters.isActive));
-  }
-  if (filters.search !== undefined && filters.search !== '') {
-    params.set('search', filters.search);
-  }
-
-  const result: unknown = await apiClient.get(`/dummy-users?${params.toString()}`);
-  return extractPaginated(result);
 }
 
 /** Fetch a single dummy user by UUID */

@@ -1,24 +1,33 @@
 <script lang="ts">
   /**
-   * Vacation Entitlements — Admin Page
+   * Vacation Entitlements — Admin Page (Phase 5.2.1 URL-driven state)
    * Manage per-employee vacation entitlements: view balance, edit entitlement, add days.
-   * SSR: Employee list loaded in +page.server.ts.
+   *
+   * URL is the single source of truth for `?page` + `?search` per
+   * FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §5.2.1. Mirrors `manage-employees`
+   * (§4.1b) — there is NO `$state` shadow of these values; every change
+   * goes through `goto()` → load re-run.
+   *
+   * SSR: Employee page slice loaded in +page.server.ts (server-paginated).
    * Client-side: Balance fetched on employee selection.
    */
   import { onDestroy } from 'svelte';
+
+  import { goto, invalidateAll } from '$app/navigation';
+  import { resolve } from '$app/paths';
 
   import { onClickOutsideDropdown } from '$lib/actions/click-outside';
   import AppDatePicker from '$lib/components/AppDatePicker.svelte';
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
   import { showSuccessAlert, showErrorAlert } from '$lib/utils';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   import EntitlementBadge from '../../../(shared)/vacation/_lib/EntitlementBadge.svelte';
 
   import AddDaysModal from './_lib/AddDaysModal.svelte';
   import * as api from './_lib/api';
   import { BALANCE_LABELS, ENTITLEMENT_LABELS } from './_lib/constants';
-  import SearchResults from './_lib/SearchResults.svelte';
   import { entitlementsState } from './_lib/state.svelte';
 
   import type { PageData } from './$types';
@@ -27,7 +36,7 @@
   const log = createLogger('VacationEntitlements');
 
   // ==========================================================================
-  // SSR DATA
+  // SSR DATA — URL is the single source of truth for page / search.
   // ==========================================================================
 
   const { data }: { data: PageData } = $props();
@@ -35,6 +44,8 @@
 
   const ssrEmployees = $derived(data.employees);
   const ssrCurrentYear = $derived(data.currentYear);
+  const pagination = $derived(data.pagination);
+  const searchTerm = $derived(data.search);
 
   $effect(() => {
     entitlementsState.setEmployees(ssrEmployees);
@@ -45,6 +56,53 @@
   onDestroy(() => {
     entitlementsState.reset();
   });
+
+  // ==========================================================================
+  // URL HELPERS — single source of truth for page/search
+  // ==========================================================================
+
+  const BASE_PATH = '/vacation/entitlements';
+
+  /**
+   * Build an href for a target page, preserving current search.
+   * `buildPaginatedHref` skips defaults (page=1 / search=''), so canonical
+   * first-page URLs stay clean (`/vacation/entitlements`).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchTerm,
+      }),
+    );
+  }
+
+  /**
+   * Navigate to a new search state. Page resets to 1 (default — not emitted
+   * into the URL). `keepFocus` preserves the search input across the load.
+   */
+  function navigateSearch(nextSearch: string): void {
+    const href = resolve(buildPaginatedHref(BASE_PATH, { search: nextSearch }));
+    void goto(href, { keepFocus: true });
+  }
+
+  // Search input → URL debouncer. Local-only; URL is the authoritative state.
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const SEARCH_DEBOUNCE_MS = 300;
+
+  function handleSearchInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const term = input.value;
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      navigateSearch(term);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function clearSearch(): void {
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    navigateSearch('');
+  }
 
   // ==========================================================================
   // BALANCE LOADING
@@ -70,47 +128,9 @@
   }
 
   // ==========================================================================
-  // SEARCH (local state — same pattern as manage-employees)
+  // YEAR DROPDOWN
   // ==========================================================================
 
-  let currentSearchQuery = $state('');
-  let searchOpen = $state(false);
-
-  /** Filtered employees based on local search query */
-  const filteredEmployees = $derived.by(() => {
-    if (currentSearchQuery.trim() === '') return entitlementsState.employees;
-    const q = currentSearchQuery.trim().toLowerCase();
-    return entitlementsState.employees.filter((emp) => {
-      const name = `${emp.firstName ?? ''} ${emp.lastName ?? ''}`.toLowerCase();
-      const empNum = emp.employeeNumber?.toLowerCase() ?? '';
-      const pos = emp.position?.toLowerCase() ?? '';
-      return (
-        name.includes(q) ||
-        emp.email.toLowerCase().includes(q) ||
-        empNum.includes(q) ||
-        pos.includes(q)
-      );
-    });
-  });
-
-  function handleSearchInput(e: Event): void {
-    const input = e.target as HTMLInputElement;
-    currentSearchQuery = input.value;
-    searchOpen = currentSearchQuery.trim().length > 0;
-  }
-
-  function clearSearch(): void {
-    currentSearchQuery = '';
-    searchOpen = false;
-  }
-
-  function handleSearchResultClick(emp: EmployeeListItem): void {
-    handleSelectEmployee(emp);
-    searchOpen = false;
-    currentSearchQuery = '';
-  }
-
-  // Dropdown state for year select
   let yearDropdownOpen = $state(false);
   const yearDisplayText = $derived(String(entitlementsState.selectedYear));
 
@@ -144,6 +164,7 @@
     const current = new Date().getFullYear();
     return [current - 1, current, current + 1];
   }
+
   // ==========================================================================
   // ENTITLEMENT FORM
   // ==========================================================================
@@ -180,7 +201,10 @@
     await api.createOrUpdateEntitlement(emp.id, payload);
     showSuccessAlert('Urlaubsanspruch aktualisiert');
     entitlementsState.closeEntitlementForm();
+    // Reload balance for the right-panel detail view + retrigger SSR load
+    // so the employee-list page stays in sync with backend state.
     await loadBalance(emp);
+    await invalidateAll();
   }
 
   function handleSaveEntitlement() {
@@ -213,6 +237,7 @@
       showSuccessAlert(`${Math.abs(days)} Tage ${label}`);
       entitlementsState.closeAddDaysModal();
       await loadBalance(emp);
+      await invalidateAll();
     } catch (err: unknown) {
       log.error({ err }, 'Add days failed');
       showErrorAlert('Fehler beim Hinzufuegen');
@@ -290,12 +315,9 @@
           <h3 class="card__title">
             <i class="fas fa-users mr-2"></i>
             Mitarbeiter
-            <span class="text-muted ml-2">({filteredEmployees.length})</span>
+            <span class="text-muted ml-2">({pagination.total})</span>
           </h3>
-          <div
-            class="search-input-wrapper mt-3 mb-0"
-            class:search-input-wrapper--open={searchOpen}
-          >
+          <div class="search-input-wrapper mt-3 mb-0">
             <div
               class="search-input"
               id="entitlement-search-container"
@@ -307,12 +329,12 @@
                 class="search-input__field"
                 placeholder="Mitarbeiter suchen..."
                 autocomplete="off"
-                value={currentSearchQuery}
+                value={searchTerm}
                 oninput={handleSearchInput}
               />
               <button
                 class="search-input__clear"
-                class:search-input__clear--visible={currentSearchQuery.length > 0}
+                class:search-input__clear--visible={searchTerm.length > 0}
                 type="button"
                 aria-label="Suche löschen"
                 onclick={clearSearch}
@@ -320,27 +342,26 @@
                 <i class="fas fa-times"></i>
               </button>
             </div>
-            <SearchResults
-              searchQuery={currentSearchQuery}
-              employees={filteredEmployees}
-              onresultclick={handleSearchResultClick}
-            />
           </div>
         </div>
         <div
           class="card__body"
           style="overflow-y: auto; flex: 1; padding: 0;"
         >
-          {#if filteredEmployees.length === 0}
+          {#if ssrEmployees.length === 0}
             <div
               class="empty-state empty-state--in-card"
               style="padding: var(--spacing-4);"
             >
-              <p class="empty-state__description">Keine Mitarbeiter gefunden</p>
+              <p class="empty-state__description">
+                {searchTerm !== '' ?
+                  `Keine Ergebnisse für "${searchTerm}"`
+                : 'Keine Mitarbeiter gefunden'}
+              </p>
             </div>
           {:else}
             <div class="employee-list">
-              {#each filteredEmployees as emp (emp.id)}
+              {#each ssrEmployees as emp (emp.id)}
                 <button
                   type="button"
                   class="employee-list__item"
@@ -365,6 +386,55 @@
             </div>
           {/if}
         </div>
+        {#if pagination.totalPages > 1}
+          <nav
+            class="pagination pagination--compact"
+            id="entitlements-pagination"
+            style="border-top: 1px solid var(--color-glass-border); padding: var(--spacing-2);"
+          >
+            {#if pagination.hasPrev}
+              <a
+                class="pagination__btn pagination__btn--prev"
+                href={pageHref(pagination.page - 1)}
+                aria-label="Vorherige Seite"
+              >
+                <i class="fas fa-chevron-left"></i>
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--prev"
+                disabled
+                aria-label="Vorherige Seite"
+              >
+                <i class="fas fa-chevron-left"></i>
+              </button>
+            {/if}
+
+            <span class="pagination__info">
+              {pagination.page} / {pagination.totalPages}
+            </span>
+
+            {#if pagination.hasNext}
+              <a
+                class="pagination__btn pagination__btn--next"
+                href={pageHref(pagination.page + 1)}
+                aria-label="Nächste Seite"
+              >
+                <i class="fas fa-chevron-right"></i>
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--next"
+                disabled
+                aria-label="Nächste Seite"
+              >
+                <i class="fas fa-chevron-right"></i>
+              </button>
+            {/if}
+          </nav>
+        {/if}
       </div>
 
       <!-- ================================================================
@@ -711,6 +781,19 @@
     font-size: 0.938rem;
     font-weight: 600;
     color: var(--text-primary);
+  }
+
+  /* Compact pagination strip inside the employee-list card. */
+  .pagination--compact {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-2);
+  }
+
+  .pagination--compact .pagination__info {
+    font-size: 0.75rem;
+    color: var(--text-muted);
   }
 
   /* Responsive: stack on small screens */

@@ -1,7 +1,17 @@
 <script lang="ts">
+  /**
+   * TPM Plan Overview Component
+   * @module lean-management/tpm/_admin/PlanOverview
+   *
+   * Phase 4.11b (2026-05-06): URL-state-driven. Plans + pagination + search
+   * arrive as props from the SSR load. Status filter dropped — backend
+   * `ListPlansQuerySchema` has no `?isActive=` field; client-side filtering
+   * over a paginated subset would be the §D5/§D10/§D11/§D12 dishonest-UI
+   * pattern. Recorded as Known Limitation #13.
+   *
+   * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Migration order" row 4.11
+   */
   import { SvelteMap } from 'svelte/reactivity';
-
-  import { resolve } from '$app/paths';
 
   import {
     INTERVAL_LABELS,
@@ -9,51 +19,40 @@
     CARD_STATUS_BADGE_CLASSES,
     APPROVAL_STATUS_LABELS,
     APPROVAL_STATUS_BADGE,
-    DEFAULT_PAGE_SIZE,
     type TpmMessages,
   } from './constants';
 
-  import type {
-    TpmPlan,
-    PlanStatusFilter,
-    IntervalType,
-    IntervalMatrixEntry,
-    CardStatus,
-  } from './types';
+  import type { PaginationMeta } from '$lib/server/api-fetch';
+  import type { TpmPlan, IntervalType, IntervalMatrixEntry, CardStatus } from './types';
 
   interface Props {
     messages: TpmMessages;
     plans: TpmPlan[];
-    totalPlans: number;
-    currentPage: number;
-    statusFilter: PlanStatusFilter;
-    searchQuery: string;
-    loading: boolean;
+    pagination: PaginationMeta;
     intervalMatrix: IntervalMatrixEntry[];
+    searchValue: string;
+    canDelete: boolean;
+    /** URL-href builder for pagination anchors — supplied by parent. */
+    pageHref: (page: number) => string;
+    /** Emitted on search-input change — parent debounces + navigates. */
+    onsearch: (value: string) => void;
+    /** Emitted on form submit (Enter key) — parent navigates immediately. */
+    onsearchsubmit: () => void;
     ondelete: (plan: TpmPlan) => void;
-    onpagechange: (page: number) => void;
-    onfilterchange: (filter: PlanStatusFilter) => void;
-    onsearch: (query: string) => void;
   }
 
   const {
     messages,
     plans,
-    totalPlans,
-    currentPage,
-    statusFilter,
-    searchQuery,
-    loading,
+    pagination,
     intervalMatrix,
-    ondelete,
-    onpagechange,
-    onfilterchange,
+    searchValue,
+    canDelete,
+    pageHref,
     onsearch,
+    onsearchsubmit,
+    ondelete,
   }: Props = $props();
-
-  const totalPages = $derived(Math.max(1, Math.ceil(totalPlans / DEFAULT_PAGE_SIZE)));
-
-  const filteredPlans = $derived(filterPlans(plans, statusFilter, searchQuery));
 
   /** Lookup: planUuid → intervalType → full matrix entry */
   const matrixLookup = $derived.by(() => {
@@ -97,27 +96,6 @@
     });
   }
 
-  function filterPlans(items: TpmPlan[], status: PlanStatusFilter, query: string): TpmPlan[] {
-    let result = items;
-
-    if (status === 'active') {
-      result = result.filter((p: TpmPlan) => p.isActive === 1);
-    } else if (status === 'archived') {
-      result = result.filter((p: TpmPlan) => p.isActive === 3);
-    }
-
-    if (query.trim().length > 0) {
-      const lower = query.toLowerCase();
-      result = result.filter(
-        (p: TpmPlan) =>
-          p.name.toLowerCase().includes(lower) ||
-          (p.assetName?.toLowerCase().includes(lower) ?? false),
-      );
-    }
-
-    return result;
-  }
-
   function getMatrixEntry(planUuid: string, interval: IntervalType): IntervalMatrixEntry | null {
     return matrixLookup.get(planUuid)?.get(interval) ?? null;
   }
@@ -147,78 +125,65 @@
     onsearch(input.value);
   }
 
+  function handleSearchSubmit(e: SubmitEvent): void {
+    e.preventDefault();
+    onsearchsubmit();
+  }
+
   function getStatusBadge(isActive: number): { label: string; cls: string } {
     if (isActive === 1) return { label: 'Aktiv', cls: 'badge--success' };
     if (isActive === 3) return { label: 'Archiviert', cls: 'badge--info' };
     return { label: 'Inaktiv', cls: 'badge--error' };
   }
+
+  /** Build the page-number range to render. Always [1..totalPages]. */
+  const pageRange = $derived(
+    Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1),
+  );
 </script>
 
-<!-- Filter bar -->
-<div class="mb-4 flex flex-wrap items-center justify-between gap-4">
-  <div class="toggle-group">
-    <button
-      type="button"
-      class="toggle-group__btn"
-      class:active={statusFilter === 'all'}
-      onclick={() => {
-        onfilterchange('all');
-      }}
+<!-- Search bar -->
+<div class="mb-4 flex flex-wrap items-center justify-end">
+  <form
+    role="search"
+    onsubmit={handleSearchSubmit}
+    class="min-w-50"
+  >
+    <label
+      class="search-input"
+      for="tpm-plans-search"
     >
-      {messages.FILTER_ALL}
-    </button>
-    <button
-      type="button"
-      class="toggle-group__btn"
-      class:active={statusFilter === 'active'}
-      onclick={() => {
-        onfilterchange('active');
-      }}
-    >
-      {messages.FILTER_ACTIVE}
-    </button>
-    <button
-      type="button"
-      class="toggle-group__btn"
-      class:active={statusFilter === 'archived'}
-      onclick={() => {
-        onfilterchange('archived');
-      }}
-    >
-      {messages.FILTER_ARCHIVED}
-    </button>
-  </div>
-
-  <div class="min-w-50">
-    <input
-      type="text"
-      class="form-field__control"
-      placeholder={messages.SEARCH_PLACEHOLDER}
-      value={searchQuery}
-      oninput={handleSearchInput}
-    />
-  </div>
+      <i
+        class="fas fa-search search-input__icon"
+        aria-hidden="true"
+      ></i>
+      <input
+        id="tpm-plans-search"
+        type="search"
+        class="search-input__field"
+        placeholder={messages.SEARCH_PLACEHOLDER}
+        value={searchValue}
+        oninput={handleSearchInput}
+        aria-label="Wartungspläne durchsuchen"
+      />
+    </label>
+  </form>
 </div>
 
 <!-- Plan table -->
-{#if loading}
-  <div class="flex items-center justify-center gap-2 p-12 text-(--color-text-muted)">
-    <i class="fas fa-spinner fa-spin"></i>
-    {messages.LOADING}
-  </div>
-{:else if filteredPlans.length === 0}
+{#if plans.length === 0}
   <div class="empty-state">
     <div class="empty-state__icon">
       <i class="fas fa-clipboard-list"></i>
     </div>
     <h3 class="empty-state__title">{messages.EMPTY_TITLE}</h3>
     <p class="empty-state__description">
-      {statusFilter === 'all' ? messages.EMPTY_DESCRIPTION : messages.EMPTY_FILTER_DESC}
+      {searchValue === '' ? messages.EMPTY_DESCRIPTION : messages.EMPTY_FILTER_DESC}
     </p>
   </div>
 {:else}
   <div class="table-responsive">
-    <table class="data-table data-table--hover data-table--striped">
+    <table class="data-table data-table--hover data-table--striped data-table--actions-hover">
       <thead>
         <tr>
           <th
@@ -255,12 +220,12 @@
         </tr>
       </thead>
       <tbody>
-        {#each filteredPlans as plan (plan.uuid)}
+        {#each plans as plan (plan.uuid)}
           {@const badge = getStatusBadge(plan.isActive)}
           <tr>
             <td>
               <a
-                href={resolve(`/lean-management/tpm/plan/${plan.uuid}`)}
+                href={`/lean-management/tpm/plan/${plan.uuid}`}
                 class="inline-flex items-center gap-2 font-medium text-(--color-text-primary) no-underline hover:text-(--color-primary)"
               >
                 <i class="fas fa-cog"></i>
@@ -322,7 +287,7 @@
             <td>
               <div class="flex gap-2">
                 <a
-                  href={resolve(`/lean-management/tpm/board/${plan.uuid}`)}
+                  href={`/lean-management/tpm/board/${plan.uuid}`}
                   class="action-icon action-icon--primary"
                   title={messages.BTN_VIEW_BOARD}
                   aria-label={messages.BTN_VIEW_BOARD}
@@ -330,7 +295,7 @@
                   <i class="fas fa-th-large"></i>
                 </a>
                 <a
-                  href={resolve(`/lean-management/tpm/locations/${plan.uuid}`)}
+                  href={`/lean-management/tpm/locations/${plan.uuid}`}
                   class="action-icon action-icon--warning"
                   title="Standorte"
                   aria-label="Standorte"
@@ -338,7 +303,7 @@
                   <i class="fas fa-map-marker-alt"></i>
                 </a>
                 <a
-                  href={resolve(`/lean-management/tpm/cards/${plan.uuid}`)}
+                  href={`/lean-management/tpm/cards/${plan.uuid}`}
                   class="action-icon action-icon--info"
                   title="Karten verwalten"
                   aria-label="Karten verwalten"
@@ -346,7 +311,7 @@
                   <i class="fas fa-clone"></i>
                 </a>
                 <a
-                  href={resolve(`/lean-management/tpm/board/${plan.uuid}/defects`)}
+                  href={`/lean-management/tpm/board/${plan.uuid}/defects`}
                   class="action-icon action-icon--danger"
                   title="Gesamtmängelliste"
                   aria-label="Gesamtmängelliste"
@@ -354,7 +319,7 @@
                   <i class="fas fa-exclamation-triangle"></i>
                 </a>
                 <a
-                  href={resolve(`/lean-management/tpm/plan/${plan.uuid}/revisions`)}
+                  href={`/lean-management/tpm/plan/${plan.uuid}/revisions`}
                   class="action-icon"
                   title="Versionshistorie"
                   aria-label="Versionshistorie"
@@ -362,24 +327,26 @@
                   <i class="fas fa-history"></i>
                 </a>
                 <a
-                  href={resolve(`/lean-management/tpm/plan/${plan.uuid}`)}
+                  href={`/lean-management/tpm/plan/${plan.uuid}`}
                   class="action-icon action-icon--edit"
                   title={messages.BTN_EDIT}
                   aria-label="Plan bearbeiten"
                 >
                   <i class="fas fa-edit"></i>
                 </a>
-                <button
-                  type="button"
-                  class="action-icon action-icon--delete"
-                  title={messages.BTN_DELETE}
-                  aria-label="Plan löschen"
-                  onclick={() => {
-                    ondelete(plan);
-                  }}
-                >
-                  <i class="fas fa-trash"></i>
-                </button>
+                {#if canDelete}
+                  <button
+                    type="button"
+                    class="action-icon action-icon--delete"
+                    title={messages.BTN_DELETE}
+                    aria-label="Plan löschen"
+                    onclick={() => {
+                      ondelete(plan);
+                    }}
+                  >
+                    <i class="fas fa-trash"></i>
+                  </button>
+                {/if}
               </div>
             </td>
           </tr>
@@ -412,37 +379,68 @@
     </span>
   </div>
 
-  <!-- Pagination -->
-  {#if totalPages > 1}
-    <div
-      class="mt-4 flex items-center justify-center gap-4 border-t border-(--color-glass-border) pt-4"
+  <!-- Pagination — anchor links per Per-Page DoD §4 -->
+  {#if pagination.totalPages > 1}
+    <nav
+      class="pagination mt-6"
+      aria-label="Seitennavigation"
     >
-      <button
-        type="button"
-        class="btn btn-primary btn-icon"
-        disabled={currentPage <= 1}
-        onclick={() => {
-          onpagechange(currentPage - 1);
-        }}
-        aria-label="Vorherige Seite"
-      >
-        <i class="fas fa-chevron-left"></i>
-      </button>
-      <span class="text-sm text-(--color-text-secondary)">
-        Seite {currentPage} von {totalPages}
-      </span>
-      <button
-        type="button"
-        class="btn btn-primary btn-icon"
-        disabled={currentPage >= totalPages}
-        onclick={() => {
-          onpagechange(currentPage + 1);
-        }}
-        aria-label="Nächste Seite"
-      >
-        <i class="fas fa-chevron-right"></i>
-      </button>
-    </div>
+      {#if pagination.hasPrev}
+        <a
+          href={pageHref(pagination.page - 1)}
+          class="pagination__btn pagination__btn--prev"
+          rel="prev"
+        >
+          <i class="fas fa-chevron-left"></i>
+          Zurück
+        </a>
+      {:else}
+        <button
+          type="button"
+          class="pagination__btn pagination__btn--prev"
+          disabled
+        >
+          <i class="fas fa-chevron-left"></i>
+          Zurück
+        </button>
+      {/if}
+
+      <div class="pagination__pages">
+        {#each pageRange as page (page)}
+          <a
+            href={pageHref(page)}
+            class="pagination__page"
+            class:pagination__page--active={page === pagination.page}
+            aria-current={page === pagination.page ? 'page' : undefined}
+          >
+            {page}
+          </a>
+        {/each}
+      </div>
+
+      {#if pagination.hasNext}
+        <a
+          href={pageHref(pagination.page + 1)}
+          class="pagination__btn pagination__btn--next"
+          rel="next"
+        >
+          Weiter
+          <i class="fas fa-chevron-right"></i>
+        </a>
+      {:else}
+        <button
+          type="button"
+          class="pagination__btn pagination__btn--next"
+          disabled
+        >
+          Weiter
+          <i class="fas fa-chevron-right"></i>
+        </button>
+      {/if}
+    </nav>
+    <span class="pagination__info mt-2">
+      Zeige {plans.length} von {pagination.total} Plänen
+    </span>
   {/if}
 {/if}
 

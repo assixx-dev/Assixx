@@ -30,9 +30,14 @@
   --input-padding-x: var(--spacing-3);
   --input-padding-y: var(--spacing-2-5);
 
-  /* Typography Families */
+  /* Typography Families
+   * 'Outfit Variable' is the family name registered by @fontsource-variable/outfit
+   * (see design-system/tokens/fonts.css). 'Outfit' kept as defensive fallback for
+   * any historic CSS still referencing the bare name; rest is system-font stack.
+   */
   --font-primary:
-    'Outfit', -apple-system, blinkmacsystemfont, 'Segoe UI', roboto, arial, sans-serif;
+    'Outfit Variable', 'Outfit', -apple-system, blinkmacsystemfont, 'Segoe UI', roboto, arial,
+    sans-serif;
 
   /* Status Colors (theme-independent) */
   --success-color: oklch(67.31% 0.1624 144.21);

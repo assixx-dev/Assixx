@@ -36,6 +36,12 @@ export const UpdateDepartmentSchema = z.object({
     .positive('Area ID must be a positive integer')
     .nullable()
     .optional(),
+  hallId: z.coerce
+    .number()
+    .int()
+    .positive('Hall ID must be a positive integer')
+    .nullable()
+    .optional(),
   isActive: z.coerce.number().int().min(0).max(4).optional(),
 });
 

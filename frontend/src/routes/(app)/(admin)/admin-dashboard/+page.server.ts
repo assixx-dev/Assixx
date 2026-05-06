@@ -25,6 +25,12 @@ import type {
   DashboardStats,
 } from './_lib/types';
 
+/** Subset of /approvals/stats response we consume on the dashboard.
+ *  Backend type: backend/src/nest/approvals/approvals.types.ts → ApprovalStats. */
+interface ApprovalsStatsResponse {
+  pending: number;
+}
+
 /** Build calendar date range for event fetching */
 function buildCalendarDateRange(): {
   startISO: string;
@@ -87,24 +93,34 @@ export const load: PageServerLoad = async ({ cookies, fetch, url }) => {
 
   const { startISO, endISO, today } = buildCalendarDateRange();
 
-  // Fetch ALL data in PARALLEL (single Promise.all = single network round-trip)
-  const [usersData, documentsData, departmentsData, teamsData, eventsData, blackboardData] =
-    await Promise.all([
-      apiFetch<User[]>('/users?role=employee', token, fetch),
-      apiFetch<{ documents?: Document[] } | Document[]>('/documents', token, fetch),
-      apiFetch<Department[]>('/departments', token, fetch),
-      apiFetch<Team[]>('/teams', token, fetch),
-      apiFetch<{ events?: CalendarEvent[] } | CalendarEvent[]>(
-        `/calendar/events?startDate=${encodeURIComponent(startISO)}&endDate=${encodeURIComponent(endISO)}&filter=all&limit=10`,
-        token,
-        fetch,
-      ),
-      apiFetch<BlackboardEntry[]>(
-        `/blackboard/dashboard?limit=${LIST_LIMITS.blackboardEntries}`,
-        token,
-        fetch,
-      ),
-    ]);
+  // Fetch ALL data in PARALLEL (single Promise.all = single network round-trip).
+  // /approvals/stats requires approvals-manage.canRead (ADR-020); admins without
+  // the permission get null → we fall back to 0 below so the card still renders.
+  const [
+    usersData,
+    documentsData,
+    departmentsData,
+    teamsData,
+    eventsData,
+    blackboardData,
+    approvalsStatsData,
+  ] = await Promise.all([
+    apiFetch<User[]>('/users?role=employee', token, fetch),
+    apiFetch<{ documents?: Document[] } | Document[]>('/documents', token, fetch),
+    apiFetch<Department[]>('/departments', token, fetch),
+    apiFetch<Team[]>('/teams', token, fetch),
+    apiFetch<{ events?: CalendarEvent[] } | CalendarEvent[]>(
+      `/calendar/events?startDate=${encodeURIComponent(startISO)}&endDate=${encodeURIComponent(endISO)}&filter=all&limit=10`,
+      token,
+      fetch,
+    ),
+    apiFetch<BlackboardEntry[]>(
+      `/blackboard/dashboard?limit=${LIST_LIMITS.blackboardEntries}`,
+      token,
+      fetch,
+    ),
+    apiFetch<ApprovalsStatsResponse>('/approvals/stats', token, fetch),
+  ]);
 
   // Process responses with safe fallbacks
   const employees = Array.isArray(usersData) ? usersData : [];
@@ -116,9 +132,8 @@ export const load: PageServerLoad = async ({ cookies, fetch, url }) => {
 
   const stats: DashboardStats = {
     employeeCount: employees.length,
-    documentCount: documents.length,
-    departmentCount: departments.length,
     teamCount: teams.length,
+    pendingApprovalsCount: approvalsStatsData?.pending ?? 0,
   };
 
   return {

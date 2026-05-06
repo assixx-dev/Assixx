@@ -266,7 +266,7 @@ describe('DummyUsersService', () => {
   // =========================================================
 
   describe('list', () => {
-    it('should return paginated results', async () => {
+    it('should return paginated results in canonical ADR-007 envelope shape', async () => {
       mockDb.query.mockResolvedValueOnce([{ count: '2' }]);
       mockDb.query.mockResolvedValueOnce([
         createDummyRow({ display_name: 'Display A' }),
@@ -279,10 +279,12 @@ describe('DummyUsersService', () => {
 
       const result = await service.list(10, {});
 
-      expect(result.total).toBe(2);
-      expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(20);
+      // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.1 — `pagination` block must
+      // expose exactly `{ page, limit, total, totalPages }`; ResponseInterceptor
+      // forwards this object verbatim into `meta.pagination`. `totalPages = 1`
+      // here because ceil(2 / 20) = 1.
       expect(result.items).toHaveLength(2);
+      expect(result.pagination).toEqual({ page: 1, limit: 20, total: 2, totalPages: 1 });
     });
 
     it('should use default page=1 and limit=20', async () => {
@@ -291,8 +293,8 @@ describe('DummyUsersService', () => {
 
       const result = await service.list(10, {});
 
-      expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(20);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(20);
       // Verify LIMIT and OFFSET params
       const dataParams = mockDb.query.mock.calls[1]?.[1] as unknown[];
       expect(dataParams).toContain(20); // limit
@@ -358,8 +360,32 @@ describe('DummyUsersService', () => {
 
       const result = await service.list(10, {});
 
-      expect(result.total).toBe(0);
+      // total=0 → totalPages=0 (not 1). FE empty-state branch keys on
+      // `pagination.total === 0`; `hasNext = page < totalPages` must yield
+      // false. See `apiFetchPaginated` in frontend/src/lib/server/api-fetch.ts.
       expect(result.items).toEqual([]);
+      expect(result.pagination).toEqual({ page: 1, limit: 20, total: 0, totalPages: 0 });
+    });
+
+    it('should compute totalPages with ceiling division', async () => {
+      // 21 records / limit 10 = 3 pages (ceiling), not 2.1 floored.
+      mockDb.query.mockResolvedValueOnce([{ count: '21' }]);
+      mockDb.query.mockResolvedValueOnce([]);
+
+      const result = await service.list(10, { page: 1, limit: 10 });
+
+      expect(result.pagination.total).toBe(21);
+      expect(result.pagination.totalPages).toBe(3);
+    });
+
+    it('should reflect explicit page + limit in the pagination block', async () => {
+      mockDb.query.mockResolvedValueOnce([{ count: '57' }]);
+      mockDb.query.mockResolvedValueOnce([]);
+
+      const result = await service.list(10, { page: 4, limit: 15 });
+
+      // ceil(57 / 15) = 4. Page 4 is the last page in this scenario.
+      expect(result.pagination).toEqual({ page: 4, limit: 15, total: 57, totalPages: 4 });
     });
   });
 

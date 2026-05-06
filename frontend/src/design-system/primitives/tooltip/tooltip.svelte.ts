@@ -193,7 +193,21 @@ function createTooltipElement(options: TooltipOptions): HTMLDivElement {
 }
 
 /**
- * Initialize global event listeners (once)
+ * Initialize global tooltip event listeners (exactly once per page load).
+ *
+ * SINGLETON-INIT LISTENERS (no cleanup path): the module-scope
+ * `isInitialized` flag (line 75) is the gatekeeper — `initializeListeners`
+ * is invoked from every `tooltip.show()` call but the early return below
+ * ensures `window.addEventListener` fires exactly once. The `blur` handler
+ * holds a named reference (`removeAllTooltips`) and the `keydown` handler
+ * is anonymous; neither is removed. Both die with `beforeunload`, no
+ * compounding leak in production.
+ *
+ * Same rationale as the SessionManager / TokenManager listeners and the
+ * backend `eventBus.on()` singletons.
+ *
+ * @see AUDIT_MEMORY_LEAKS.md step 7 (2026-05-06) — frontend listener audit
+ * @see AUDIT_MEMORY_LEAKS.md step 4 — backend singleton-init precedent
  */
 function initializeListeners(): void {
   if (!browser || isInitialized) return;

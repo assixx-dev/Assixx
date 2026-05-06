@@ -60,16 +60,23 @@ export class HallsService {
     private readonly db: DatabaseService,
   ) {}
 
+  /**
+   * Hall list with associated departments.
+   *
+   * After migration 20260505221345432_simplify-department-hall-1to1, the M:N
+   * `department_halls` junction was replaced with a 1:N `departments.hall_id`
+   * column. The CTE below aggregates departments by hall_id directly from the
+   * departments table — same shape as before, simpler join.
+   */
   private readonly FIND_ALL_HALLS_QUERY = `
     WITH dept_assignments AS (
-      SELECT dh.hall_id,
-        ARRAY_AGG(dh.department_id ORDER BY d.name) as department_ids,
+      SELECT d.hall_id,
+        ARRAY_AGG(d.id ORDER BY d.name) as department_ids,
         COUNT(*) as count,
         STRING_AGG(d.name, E'\\n' ORDER BY d.name) as names
-      FROM department_halls dh
-      JOIN departments d ON dh.department_id = d.id
-      WHERE dh.tenant_id = $1
-      GROUP BY dh.hall_id
+      FROM departments d
+      WHERE d.tenant_id = $1 AND d.hall_id IS NOT NULL
+      GROUP BY d.hall_id
     )
     SELECT h.*, a.name as area_name,
       da.department_ids, COALESCE(da.count, 0) as department_count,

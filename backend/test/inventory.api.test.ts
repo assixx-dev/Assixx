@@ -453,16 +453,47 @@ describe('Inventory: Create Item (Auto-Code)', () => {
 });
 
 describe('Inventory: Get Items', () => {
-  it('should return items filtered by listId', async () => {
+  it('should return canonical ADR-007 envelope (data array + meta.pagination)', async () => {
+    // FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.8a + §D17:
+    // ResponseInterceptor unwraps `{ items, pagination }` so `body.data` is the
+    // items array and `body.meta.pagination` carries the page metadata.
     const res = await fetch(`${API}/items?listId=${listId}`, {
       headers: authOnly(auth.authToken),
     });
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as JsonBody;
-    expect(body.data).toHaveProperty('items');
-    expect(body.data).toHaveProperty('total');
-    expect(body.data.total).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as unknown[]).length).toBeGreaterThanOrEqual(1);
+    expect(body.meta).toBeDefined();
+    expect(body.meta?.pagination).toBeDefined();
+    expect(body.meta?.pagination).toHaveProperty('page');
+    expect(body.meta?.pagination).toHaveProperty('limit');
+    expect(body.meta?.pagination).toHaveProperty('total');
+    expect(body.meta?.pagination).toHaveProperty('totalPages');
+  });
+
+  it('should echo ?page=2&limit=10 with correct totalPages math', async () => {
+    // Mirrors Phase 3.1 dummy-users + 4.5a KVP + 4.7a work-orders precedent.
+    // Verifies the envelope reports the requested page/limit and computes
+    // totalPages = total === 0 ? 0 : Math.ceil(total/limit). Works on whatever
+    // fixture data exists — assertion is on the math, not on a specific count.
+    const res = await fetch(`${API}/items?listId=${listId}&page=2&limit=10`, {
+      headers: authOnly(auth.authToken),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as JsonBody;
+    const pagination = body.meta?.pagination as {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+    expect(pagination.page).toBe(2);
+    expect(pagination.limit).toBe(10);
+    const expectedTotalPages = pagination.total === 0 ? 0 : Math.ceil(pagination.total / 10);
+    expect(pagination.totalPages).toBe(expectedTotalPages);
   });
 
   it('should require listId parameter', async () => {
@@ -521,6 +552,121 @@ describe('Inventory: Update Item', () => {
 // Exercises the full photo lifecycle including the drag-and-drop
 // reorder endpoint (PUT /items/:uuid/photos/reorder). Upload uses
 // multipart/form-data with a minimal 1x1 PNG generated in-memory.
+
+// ── Pagination (Step 5.1) ──────────────────────────────────────
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14c, 2026-05-06):
+// 4 mandated assertions per migrated endpoint mirroring KVP §14b precedent.
+// Search columns: i.name OR i.code OR i.serial_number (inventory-items.service.ts:478).
+// 22 = 2 × limit + 2 → totalPages >= 3 guarantees structural cross-page hits.
+// Auto-code advances to ATK-024 — no later test asserts a specific code past
+// ATK-002 (verified 2026-05-06), so the code-counter side-effect is benign.
+// §D17 sanity: assert each row carries a `customValues` array (denormalised
+// from the pre-Phase-4.8 sibling map) — proves the pagination slice didn't
+// strip the per-row custom-field carrier.
+// Scope: ?listId=${listId} preserves the route's mandatory listId contract;
+// search narrows within that list. Cleanup: DELETE each seeded item (soft).
+// Placed BEFORE 'Inventory: Photos Lifecycle' so existing `itemId` (ATK-001)
+// is still present for photo tests.
+describe('Inventory: Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededIds: string[] = [];
+
+  beforeAll(async () => {
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${API}/items`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          listId,
+          name: `${tag}_${String(i).padStart(2, '0')}`,
+          description: 'Pagination seed — deleted by afterAll',
+          status: 'operational',
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: item ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededIds.push(body.data.id as string);
+    }
+  });
+
+  afterAll(async () => {
+    for (const id of seededIds) {
+      await fetch(`${API}/items/${id}`, {
+        method: 'DELETE',
+        headers: authOnly(auth.authToken),
+      });
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${API}/items?listId=${listId}&search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ name: string; customValues: unknown }>) {
+      expect(item.name).toContain(tag);
+      // §D17: per-row customValues array survives the Phase-4.8a denormalisation.
+      expect(Array.isArray(item.customValues)).toBe(true);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${API}/items?listId=${listId}&search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${API}/items?listId=${listId}&search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ name: string }>) {
+      expect(item.name).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(`${API}/items?listId=${listId}&search=${tag}&limit=100`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedIds = (body.data as Array<{ id: string }>)
+      .map((d) => d.id)
+      .sort((a, b) => a.localeCompare(b));
+    const expectedIds = [...seededIds].sort((a, b) => a.localeCompare(b));
+    expect(returnedIds).toEqual(expectedIds);
+  });
+});
 
 describe('Inventory: Photos Lifecycle', () => {
   let photoIdA: string;

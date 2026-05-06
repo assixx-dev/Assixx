@@ -96,7 +96,6 @@
 
 /* Card variant - with border and padding */
 .collapse--card {
-  backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
 

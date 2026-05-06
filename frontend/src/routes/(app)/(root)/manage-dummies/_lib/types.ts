@@ -72,11 +72,10 @@ export interface UpdateDummyPayload {
 // =============================================================================
 // API RESPONSE TYPES
 // =============================================================================
-
-/** Paginated list response (matches backend PaginatedDummyUsers) */
-export interface PaginatedDummies {
-  items: DummyUser[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §3.2 (2026-05-04):
+// `PaginatedDummies` removed. The server load (`+page.server.ts`) now uses
+// `PaginatedResult<DummyUser>` from `$lib/server/api-fetch.ts` directly —
+// canonical ADR-007 envelope shape `{ data: T[], pagination: { page, limit,
+// total, totalPages, hasNext, hasPrev } }`. No re-export here because the
+// page-level types are derived through `./$types`.

@@ -14,7 +14,6 @@
 /* ========== ACTIVE STATE (Shows "Deaktivieren") ========== */
 
 .btn-status-active {
-  backdrop-filter: blur(var(--blur-md));
   box-shadow: var(--shadow-btn-status-active);
   border: 1px solid var(--color-status-active);
 
@@ -43,7 +42,6 @@
 /* ========== INACTIVE STATE (Shows "Aktivieren") ========== */
 
 .btn-status-inactive {
-  backdrop-filter: blur(var(--blur-md));
   box-shadow: var(--shadow-btn-status-inactive);
   border: 1px solid var(--color-status-inactive);
 

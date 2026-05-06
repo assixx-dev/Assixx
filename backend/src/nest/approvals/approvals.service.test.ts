@@ -260,9 +260,9 @@ describe('ApprovalsService', () => {
       const result = await service.findAll({}, 5, 10);
 
       expect(result.items).toHaveLength(2);
-      expect(result.total).toBe(2);
-      expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(20);
+      expect(result.pagination.total).toBe(2);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(20);
     });
 
     it('should apply status filter', async () => {
@@ -315,7 +315,11 @@ describe('ApprovalsService', () => {
       const result = await service.findAll({}, 5, 10);
 
       expect(result.items).toHaveLength(0);
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
+      // `totalPages = 0` when no rows — keeps the FE empty-state branch
+      // (`total === 0`) and `hasNext = page < totalPages` coherent. Mirrors
+      // dummy-users (Phase 3.1) and users (Phase 4.1a) precedent.
+      expect(result.pagination.totalPages).toBe(0);
     });
 
     it('should default total to 0 when COUNT returns no rows', async () => {
@@ -324,7 +328,7 @@ describe('ApprovalsService', () => {
 
       const result = await service.findAll({}, 5, 10);
 
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
       expect(result.items).toHaveLength(0);
     });
 
@@ -336,8 +340,10 @@ describe('ApprovalsService', () => {
 
       const result = await service.findAll({ page: 3, limit: 10 }, 5, 10);
 
-      expect(result.page).toBe(3);
-      expect(result.pageSize).toBe(10);
+      expect(result.pagination.page).toBe(3);
+      expect(result.pagination.limit).toBe(10);
+      // 50 rows / limit 10 → 5 pages. Math.ceil contract verified.
+      expect(result.pagination.totalPages).toBe(5);
 
       // Verify LIMIT and OFFSET in the data query
       const dataCall = mockClient.query.mock.calls[1] as [string, unknown[]];
@@ -363,6 +369,63 @@ describe('ApprovalsService', () => {
 
       const countCall = mockClient.query.mock.calls[0] as [string, unknown[]];
       expect(countCall[1]).toEqual(['pending', 'kvp', 'high']);
+    });
+
+    // -----------------------------------------------------------
+    // search filter (Phase 1.2b — D3 convention, ILIKE on title OR description)
+    // -----------------------------------------------------------
+
+    it('should apply search filter (ILIKE on title OR description)', async () => {
+      mockClient.query.mockResolvedValueOnce({ rows: [{ count: '1' }] });
+      mockClient.query.mockResolvedValueOnce({
+        rows: [makeApprovalListRow({ title: 'Wartung Pumpe 3' })],
+      });
+
+      const result = await service.findAll({ search: 'Wartung' }, 5, 10);
+
+      expect(result.items).toHaveLength(1);
+
+      // COUNT call must contain ILIKE pattern + the wrapped search term as the only filter param.
+      const countCall = mockClient.query.mock.calls[0] as [string, unknown[]];
+      expect(countCall[0]).toContain('ILIKE');
+      expect(countCall[0]).toContain('a.title');
+      expect(countCall[0]).toContain('a.description');
+      expect(countCall[1]).toEqual(['%Wartung%']);
+    });
+
+    it('should drop search WHERE clause when search is empty string', async () => {
+      // Backwards-compat invariant: empty string === undefined (no filter applied).
+      mockClient.query.mockResolvedValueOnce({ rows: [{ count: '0' }] });
+      mockClient.query.mockResolvedValueOnce({ rows: [] });
+
+      await service.findAll({ search: '' }, 5, 10);
+
+      const countCall = mockClient.query.mock.calls[0] as [string, unknown[]];
+      expect(countCall[0]).not.toContain('ILIKE');
+      expect(countCall[1]).toEqual([]);
+    });
+
+    it('should combine search with other filters in correct param order', async () => {
+      mockClient.query.mockResolvedValueOnce({ rows: [{ count: '1' }] });
+      mockClient.query.mockResolvedValueOnce({
+        rows: [makeApprovalListRow()],
+      });
+
+      await service.findAll(
+        {
+          status: 'pending',
+          addonCode: 'kvp',
+          priority: 'high',
+          search: 'urgent',
+        },
+        5,
+        10,
+      );
+
+      const countCall = mockClient.query.mock.calls[0] as [string, unknown[]];
+      // Order matches push order: status, addonCode, priority, search.
+      expect(countCall[1]).toEqual(['pending', 'kvp', 'high', '%urgent%']);
+      expect(countCall[0]).toContain('ILIKE');
     });
   });
 
@@ -455,7 +518,7 @@ describe('ApprovalsService', () => {
       const result = await service.findByAssignee(999, 10, {});
 
       expect(result.items).toHaveLength(0);
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
     });
 
     it('should default total to 0 when COUNT returns no rows', async () => {
@@ -464,7 +527,7 @@ describe('ApprovalsService', () => {
 
       const result = await service.findByAssignee(20, 10, {});
 
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
       expect(result.items).toHaveLength(0);
     });
 
@@ -474,8 +537,8 @@ describe('ApprovalsService', () => {
 
       const result = await service.findByAssignee(20, 10, { page: 2, limit: 10 });
 
-      expect(result.page).toBe(2);
-      expect(result.pageSize).toBe(10);
+      expect(result.pagination.page).toBe(2);
+      expect(result.pagination.limit).toBe(10);
       const dataCall = mockClient.query.mock.calls[1] as [string, unknown[]];
       expect(dataCall[1]).toContain(10); // limit
       expect(dataCall[1]).toContain(10); // offset = (2-1)*10

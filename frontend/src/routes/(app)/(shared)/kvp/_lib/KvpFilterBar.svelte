@@ -1,58 +1,128 @@
 <script lang="ts">
   /**
-   * KVP Filter Bar - All filter controls for the KVP suggestions list
-   * Extracted from +page.svelte for modularity (max-lines rule)
+   * KVP Filter Bar — All filter controls for the KVP suggestions list
+   * (Phase 4.5b URL-driven state).
+   *
+   * Pre-Phase-4.5b this component mutated `kvpState.set*Filter()` and
+   * called an `onfilterchange` callback that triggered a client-side
+   * `loadSuggestionsData()`. Post-4.5b every filter value is read from
+   * `data.*` props (URL-driven) and every change emits `navigate(...)`
+   * which goto()s the new URL — the SSR load reruns automatically.
+   *
+   * Removed in 4.5b (per masterplan §D9 / Q3 sign-off + §D10):
+   *   - Asset-filter dropdown (`assetFilter` state, `'asset'` view toggle).
+   *   - Manage-view toggle (`'manage'` filter — no backend equivalent).
+   *   - Department-filter dropdown (silent backend no-op — `?departmentId=`
+   *     was stripped by Zod since `ListSuggestionsQuerySchema` doesn't
+   *     declare it; use the "department" view toggle instead, which maps
+   *     to `?orgLevel=department`).
    */
-
-  import { SvelteSet } from 'svelte/reactivity';
 
   import { onClickOutsideDropdown } from '$lib/actions/click-outside';
   import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
 
-  import { createFilterOptions, STATUS_FILTER_OPTIONS } from './constants';
-  import { kvpState } from './state.svelte';
+  import { createFilterOptions, STATUS_FILTER_OPTIONS, type FilterToggleValue } from './constants';
   import { debounce } from './utils';
 
-  import type { UserTeamWithAssets } from './types';
+  import type { KvpCategory, UserTeamWithAssets } from './types';
+
+  /**
+   * Override shape passed to the parent's `onnavigate()` callback. Mirrors
+   * the `FilterOverrides` interface in `+page.svelte` — duplicated locally
+   * to avoid a circular import. Each value is either the URL-emittable form
+   * or `undefined` to clear the filter (sentinel mapping happens in this
+   * component's handlers, not in the parent's `navigateFilters()`).
+   */
+  type StatusUrlValue = 'new' | 'in_review' | 'approved' | 'implemented' | 'rejected' | 'archived';
+  type OrgLevelUrlValue = 'company' | 'department' | 'area' | 'team';
+
+  interface NavigateOverrides {
+    search?: string;
+    status?: StatusUrlValue | undefined;
+    orgLevel?: OrgLevelUrlValue | undefined;
+    categoryId?: number | undefined;
+    customCategoryId?: number | undefined;
+    teamId?: number | undefined;
+    mineOnly?: 'true' | undefined;
+  }
+
+  /** Incoming prop shape — includes `'all'` sentinels for the no-filter state. */
+  type StatusInputValue = StatusUrlValue | 'all';
+  type OrgLevelInputValue = OrgLevelUrlValue | 'all';
 
   interface Props {
     userOrganizations: UserTeamWithAssets[];
-    onfilterchange: () => void;
+    categories: KvpCategory[];
     labels?: HierarchyLabels;
+    /** Search input value (URL-driven). */
+    search: string;
+    /** Status dropdown value — `'all'` is the no-filter sentinel. */
+    status: StatusInputValue;
+    /** orgLevel dropdown / view-toggle value — `'all'` is the no-filter sentinel. */
+    orgLevel: OrgLevelInputValue;
+    /** Selected global-category id (mutex with `customCategoryId`). */
+    categoryId: number | null;
+    /** Selected custom-category id (mutex with `categoryId`). */
+    customCategoryId: number | null;
+    /** Selected team id (URL-driven). */
+    teamId: number | null;
+    /** "Only my suggestions" toggle (URL-driven). */
+    mineOnly: boolean;
+    /**
+     * Parent navigates to a new URL with the provided filter overrides.
+     * Page resets to 1 on every call (default — not emitted into the URL).
+     * Each unspecified key inherits the current URL value; explicit
+     * `undefined` clears that filter.
+     */
+    onnavigate: (overrides: NavigateOverrides) => void;
   }
 
-  const { userOrganizations, onfilterchange, labels = DEFAULT_HIERARCHY_LABELS }: Props = $props();
+  const {
+    userOrganizations,
+    categories,
+    labels = DEFAULT_HIERARCHY_LABELS,
+    search,
+    status,
+    orgLevel,
+    categoryId,
+    customCategoryId,
+    teamId,
+    mineOnly,
+    onnavigate,
+  }: Props = $props();
 
   const filterOptions = $derived(createFilterOptions(labels));
 
   // ==========================================================================
-  // DROPDOWN STATE
+  // VIEW-TOGGLE STATE (derived from URL state; mutex by design)
+  //
+  // The view toggle decomposes into URL primitives at navigation time:
+  //   'all'        → no orgLevel, no mineOnly, status≠archived
+  //   'mine'       → mineOnly=true
+  //   'team'       → orgLevel=team
+  //   'department' → orgLevel=department
+  //   'company'    → orgLevel=company
+  //   'archived'   → status=archived
+  //
+  // Multiple URL flags can be set simultaneously (e.g. mineOnly=true AND
+  // orgLevel=team) but the toggle is mutex — `currentView` picks the most
+  // specific match in priority order: archived > mineOnly > orgLevel > all.
+  // ==========================================================================
+
+  const currentView = $derived<FilterToggleValue>(
+    status === 'archived' ? 'archived'
+    : mineOnly ? 'mine'
+    : orgLevel === 'team' ? 'team'
+    : orgLevel === 'department' ? 'department'
+    : orgLevel === 'company' ? 'company'
+    : 'all',
+  );
+
+  // ==========================================================================
+  // DROPDOWN UI STATE — local-only (controls open/closed; not URL-persistent).
   // ==========================================================================
 
   let activeDropdown = $state<string | null>(null);
-  let statusDisplayText = $state('Alle Status');
-  let categoryDisplayText = $state('Alle Kategorien');
-  let departmentDisplayText = $state<string | null>(null);
-  let teamDisplayText = $state<string | null>(null);
-  let assetDisplayText = $state<string | null>(null);
-
-  /** Show selected name or dynamic default */
-  const departmentDisplay = $derived(departmentDisplayText ?? `Alle ${labels.department}`);
-  const teamDisplay = $derived(teamDisplayText ?? `Alle ${labels.team}`);
-  const assetDisplay = $derived(assetDisplayText ?? `Alle ${labels.asset}`);
-
-  const debouncedSearch = debounce(() => {
-    onfilterchange();
-  }, 300);
-
-  // ==========================================================================
-  // FILTER HANDLERS
-  // ==========================================================================
-
-  function handleFilterChange(filter: string) {
-    kvpState.setFilter(filter as typeof kvpState.currentFilter);
-    onfilterchange();
-  }
 
   function toggleDropdown(dropdownId: string) {
     activeDropdown = activeDropdown === dropdownId ? null : dropdownId;
@@ -62,66 +132,120 @@
     activeDropdown = null;
   }
 
-  function handleStatusSelect(value: string, label: string) {
-    kvpState.setStatusFilter(value);
-    statusDisplayText = label;
-    closeAllDropdowns();
-    onfilterchange();
-  }
+  // ==========================================================================
+  // DERIVED DISPLAY TEXT — read from URL state via lookup, no $state shadow.
+  // ==========================================================================
 
-  function handleCategorySelect(value: string, label: string) {
-    kvpState.setCategoryFilter(value);
-    categoryDisplayText = label;
-    closeAllDropdowns();
-    onfilterchange();
-  }
+  const statusDisplayText = $derived(
+    STATUS_FILTER_OPTIONS.find((o) => o.value === (status === 'all' ? '' : status))?.label ??
+      'Alle Status',
+  );
 
-  function handleDepartmentSelect(value: string, label: string | null) {
-    kvpState.setDepartmentFilter(value);
-    departmentDisplayText = label;
-    closeAllDropdowns();
-    onfilterchange();
-  }
-
-  function handleTeamSelect(value: string, label: string | null) {
-    kvpState.setTeamFilter(value);
-    teamDisplayText = label;
-    closeAllDropdowns();
-    onfilterchange();
-  }
-
-  function handleAssetSelect(value: string, label: string | null) {
-    kvpState.setAssetFilter(value);
-    assetDisplayText = label;
-    closeAllDropdowns();
-    onfilterchange();
-  }
-
-  /** All assets from user organizations (deduplicated) */
-  const allFilterAssets = $derived.by(() => {
-    const seen = new SvelteSet<number>();
-    const assets: { id: number; name: string }[] = [];
-    for (const team of userOrganizations) {
-      for (const asset of team.assets) {
-        if (!seen.has(asset.id)) {
-          seen.add(asset.id);
-          assets.push(asset);
-        }
-      }
+  /**
+   * Selected category dropdown label. Composite (`source:id`) lookup against
+   * the categories list passed via props. Falls back to the no-filter label
+   * when neither id is set or the id no longer exists (e.g. category was
+   * soft-deleted between load and render).
+   */
+  const categoryDisplayText = $derived.by(() => {
+    if (categoryId !== null) {
+      const cat = categories.find((c) => c.source === 'global' && c.id === categoryId);
+      return cat?.name ?? 'Alle Kategorien';
     }
-    return assets;
+    if (customCategoryId !== null) {
+      const cat = categories.find((c) => c.source === 'custom' && c.id === customCategoryId);
+      return cat?.name ?? 'Alle Kategorien';
+    }
+    return 'Alle Kategorien';
   });
+
+  const teamDisplayText = $derived(
+    teamId === null ?
+      `Alle ${labels.team}`
+    : (userOrganizations.find((t) => t.teamId === teamId)?.teamName ?? `Alle ${labels.team}`),
+  );
+
+  // ==========================================================================
+  // HANDLERS — every change emits a `navigate()` call; no local state mutation.
+  // ==========================================================================
+
+  /**
+   * View-toggle button → URL primitives. Decomposed into a small lookup
+   * table so each call has linear control flow (keeps cyclomatic +
+   * cognitive complexity under the budget).
+   *
+   * Each row resets `orgLevel` + `mineOnly` and conditionally touches
+   * `status` (only when entering / leaving the archived view).
+   */
+  const VIEW_TO_OVERRIDES: Record<
+    FilterToggleValue,
+    { orgLevel: NavigateOverrides['orgLevel']; mineOnly: NavigateOverrides['mineOnly'] }
+  > = {
+    all: { orgLevel: undefined, mineOnly: undefined },
+    mine: { orgLevel: undefined, mineOnly: 'true' },
+    team: { orgLevel: 'team', mineOnly: undefined },
+    department: { orgLevel: 'department', mineOnly: undefined },
+    company: { orgLevel: 'company', mineOnly: undefined },
+    archived: { orgLevel: undefined, mineOnly: undefined },
+  };
+
+  function handleViewChange(view: FilterToggleValue): void {
+    const base = VIEW_TO_OVERRIDES[view];
+    const overrides: NavigateOverrides = {
+      orgLevel: base.orgLevel,
+      mineOnly: base.mineOnly,
+    };
+    // Status touches only at the archived boundary — preserve the user's
+    // dropdown selection otherwise.
+    if (view === 'archived') overrides.status = 'archived';
+    else if (status === 'archived') overrides.status = undefined;
+    onnavigate(overrides);
+  }
+
+  function handleStatusSelect(value: string): void {
+    closeAllDropdowns();
+    onnavigate({ status: value === '' ? undefined : (value as StatusUrlValue) });
+  }
+
+  /**
+   * Category-dropdown click handler. The dropdown emits `source:id` strings
+   * that map to one of the two backend params (mutex). Selecting "Alle
+   * Kategorien" clears both.
+   */
+  function handleCategorySelect(source: 'global' | 'custom' | null, id: number | null): void {
+    closeAllDropdowns();
+    if (source === null) {
+      onnavigate({ categoryId: undefined, customCategoryId: undefined });
+      return;
+    }
+    if (source === 'global') {
+      onnavigate({ categoryId: id ?? undefined, customCategoryId: undefined });
+      return;
+    }
+    onnavigate({ categoryId: undefined, customCategoryId: id ?? undefined });
+  }
+
+  function handleTeamSelect(value: number | null): void {
+    closeAllDropdowns();
+    onnavigate({ teamId: value ?? undefined });
+  }
+
+  /**
+   * Search debounce mirrors the `manage-assets` reference impl
+   * (300 ms). `keepFocus: true` is set in the parent's `goto()` call so the
+   * input keeps focus across the SSR load.
+   */
+  const debouncedSearchNavigate = debounce((term: unknown) => {
+    onnavigate({ search: term as string });
+  }, 300);
 
   function handleSearchInput(event: Event) {
     const target = event.target as HTMLInputElement;
-    kvpState.setSearchQuery(target.value);
-    debouncedSearch();
+    debouncedSearchNavigate(target.value);
   }
 
-  // Capture-phase click-outside: works inside modals (bypasses stopPropagation)
-  $effect(() => {
-    return onClickOutsideDropdown(closeAllDropdowns);
-  });
+  // Capture-phase click-outside: works inside modals (bypasses stopPropagation).
+  $effect(() => onClickOutsideDropdown(closeAllDropdowns));
 </script>
 
 <div class="card mb-6">
@@ -142,10 +266,10 @@
             <button
               type="button"
               class="toggle-group__btn"
-              class:active={kvpState.currentFilter === option.value}
+              class:active={currentView === option.value}
               data-value={option.value}
               onclick={() => {
-                handleFilterChange(option.value);
+                handleViewChange(option.value);
               }}
               title={option.title}
             >
@@ -185,7 +309,7 @@
                 data-action="select-status"
                 data-value={option.value}
                 onclick={() => {
-                  handleStatusSelect(option.value, option.label);
+                  handleStatusSelect(option.value);
                 }}
               >
                 {option.label}
@@ -223,72 +347,22 @@
               data-action="select-category"
               data-value=""
               onclick={() => {
-                handleCategorySelect('', 'Alle Kategorien');
+                handleCategorySelect(null, null);
               }}
             >
               Alle Kategorien
             </button>
-            {#each kvpState.categories as category (`${category.source}:${String(category.id)}`)}
+            {#each categories as category (`${category.source}:${String(category.id)}`)}
               <button
                 type="button"
                 class="dropdown__option"
                 data-action="select-category"
                 data-value={`${category.source}:${String(category.id)}`}
                 onclick={() => {
-                  handleCategorySelect(`${category.source}:${category.id}`, category.name);
+                  handleCategorySelect(category.source, category.id);
                 }}
               >
                 {category.name}
-              </button>
-            {/each}
-          </div>
-        </div>
-      </div>
-
-      <!-- Department Filter -->
-      <div class="form-field">
-        <span class="form-field__label">{labels.department}</span>
-        <div
-          class="dropdown mt-2"
-          data-dropdown="department"
-        >
-          <button
-            type="button"
-            class="dropdown__trigger"
-            class:active={activeDropdown === 'department'}
-            onclick={() => {
-              toggleDropdown('department');
-            }}
-          >
-            <span>{departmentDisplay}</span>
-            <i class="fas fa-chevron-down"></i>
-          </button>
-          <div
-            class="dropdown__menu"
-            class:active={activeDropdown === 'department'}
-          >
-            <button
-              type="button"
-              class="dropdown__option"
-              data-action="select-department"
-              data-value=""
-              onclick={() => {
-                handleDepartmentSelect('', null);
-              }}
-            >
-              Alle {labels.department}
-            </button>
-            {#each kvpState.departments as dept (dept.id)}
-              <button
-                type="button"
-                class="dropdown__option"
-                data-action="select-department"
-                data-value={dept.id.toString()}
-                onclick={() => {
-                  handleDepartmentSelect(dept.id.toString(), dept.name);
-                }}
-              >
-                {dept.name}
               </button>
             {/each}
           </div>
@@ -310,7 +384,7 @@
               toggleDropdown('team');
             }}
           >
-            <span>{teamDisplay}</span>
+            <span>{teamDisplayText}</span>
             <i class="fas fa-chevron-down"></i>
           </button>
           <div
@@ -321,7 +395,7 @@
               type="button"
               class="dropdown__option"
               onclick={() => {
-                handleTeamSelect('', null);
+                handleTeamSelect(null);
               }}
             >
               Alle {labels.team}
@@ -331,7 +405,7 @@
                 type="button"
                 class="dropdown__option"
                 onclick={() => {
-                  handleTeamSelect(team.teamId.toString(), team.teamName);
+                  handleTeamSelect(team.teamId);
                 }}
               >
                 {team.teamName}
@@ -340,54 +414,6 @@
           </div>
         </div>
       </div>
-
-      <!-- Asset Filter -->
-      {#if allFilterAssets.length > 0}
-        <div class="form-field">
-          <span class="form-field__label">{labels.asset}</span>
-          <div
-            class="dropdown mt-2"
-            data-dropdown="asset"
-          >
-            <button
-              type="button"
-              class="dropdown__trigger"
-              class:active={activeDropdown === 'asset'}
-              onclick={() => {
-                toggleDropdown('asset');
-              }}
-            >
-              <span>{assetDisplay}</span>
-              <i class="fas fa-chevron-down"></i>
-            </button>
-            <div
-              class="dropdown__menu"
-              class:active={activeDropdown === 'asset'}
-            >
-              <button
-                type="button"
-                class="dropdown__option"
-                onclick={() => {
-                  handleAssetSelect('', null);
-                }}
-              >
-                Alle {labels.asset}
-              </button>
-              {#each allFilterAssets as asset (asset.id)}
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    handleAssetSelect(asset.id.toString(), asset.name);
-                  }}
-                >
-                  {asset.name}
-                </button>
-              {/each}
-            </div>
-          </div>
-        </div>
-      {/if}
 
       <!-- Suche -->
       <div class="form-field kvp-search-field">
@@ -398,7 +424,7 @@
             type="search"
             class="search-input__field"
             placeholder="Vorschläge durchsuchen..."
-            value={kvpState.searchQuery}
+            value={search}
             oninput={handleSearchInput}
           />
         </div>

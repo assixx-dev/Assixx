@@ -6,16 +6,15 @@
    * Table view of all items in an inventory list.
    * Supports filtering, item creation with custom fields, and navigation to item detail.
    */
-  import { SvelteURLSearchParams } from 'svelte/reactivity';
-
   import { goto, invalidateAll } from '$app/navigation';
-  import { page } from '$app/state';
+  import { resolve } from '$app/paths';
 
   import { onClickOutsideDropdown } from '$lib/actions/click-outside';
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
   import { showErrorAlert, showSuccessAlert } from '$lib/stores/toast';
   import { getApiClient } from '$lib/utils/api-client';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
 
   import {
     API_ENDPOINTS,
@@ -31,6 +30,7 @@
     InventoryCustomField,
     InventoryItem,
     InventoryItemStatus,
+    InventoryItemWithCustomValues,
   } from '../../_lib/types';
 
   const log = createLogger('InventoryItemsPage');
@@ -38,11 +38,15 @@
 
   const { data }: { data: PageData } = $props();
 
+  // SSR data — single source of truth, no `$state` shadows of the list.
+  // `urlState` is the read side of the URL contract defined in `+page.server.ts`;
+  // every interaction maps to a `goto()` call that updates the URL, the load
+  // function re-runs, and these derivations re-fire.
   const list = $derived(data.list);
   const items = $derived(data.items);
   const fields = $derived(data.fields);
-  const total = $derived(data.total);
-  const customValuesByItem = $derived(data.customValuesByItem);
+  const pagination = $derived(data.pagination);
+  const urlState = $derived(data.urlState);
 
   // ── UI State ──────────────────────────────────────────────────
 
@@ -60,8 +64,10 @@
   // `trim is not a function` as soon as the user types a digit.
   let formYearOfManufacture = $state<number | null>(null);
   let formNotes = $state('');
-  let filterStatus = $state<InventoryItemStatus | ''>('');
-  let searchQuery = $state('');
+  // Search input is a writable `$derived` (Svelte 5.21+) — re-derives from
+  // URL state on navigation, can be locally reassigned during typing. Replaces
+  // the `$state(initial) + $effect(sync)` mirror pattern (Session 9b §D16).
+  let searchInput = $derived(urlState.search);
   let previewItem = $state<InventoryItem | null>(null);
 
   function closePreview(): void {
@@ -100,13 +106,48 @@
 
   $effect(() => onClickOutsideDropdown(closeAllDropdowns));
 
-  const totalPages = $derived(Math.max(1, Math.ceil(total / 50)));
-  const currentPage = $derived(data.currentPage);
   const codeExample = $derived(
     list !== null ?
       `${list.codePrefix}${list.codeSeparator}${'0'.repeat(list.codeDigits).slice(0, -1)}1`
     : '',
   );
+
+  // ── URL Navigation ────────────────────────────────────────────
+  // Every filter / page / search interaction maps to a `goto()` call. The
+  // load function is the single source of truth — local `$state` shadows of
+  // the list would invite drift between URL and rendered state.
+
+  const basePath = $derived(list !== null ? `/inventory/lists/${list.id}` : '');
+
+  /**
+   * Build the next URL by spreading current URL state and applying overrides.
+   * Filter / search changes always reset to page 1 (Per-Page DoD §4 —
+   * "Filter ... re-fetches and resets to page 1").
+   */
+  function navigate(updates: Record<string, string>): void {
+    void goto(
+      resolve(
+        buildPaginatedHref(basePath, {
+          page: 1,
+          search: urlState.search,
+          status: urlState.status,
+          ...updates,
+        }),
+      ),
+      { keepFocus: true, noScroll: true },
+    );
+  }
+
+  /** Anchor href for a specific page number — preserves filters. */
+  function pageHref(page: number): string {
+    return resolve(
+      buildPaginatedHref(basePath, {
+        page,
+        search: urlState.search,
+        status: urlState.status,
+      }),
+    );
+  }
 
   // ── Helpers ───────────────────────────────────────────────────
 
@@ -202,30 +243,37 @@
     }
   }
 
-  function applyFilter(): void {
-    const params = new SvelteURLSearchParams();
-    if (filterStatus !== '') params.set('status', filterStatus);
-    if (searchQuery.trim() !== '') params.set('search', searchQuery.trim());
-    const qs = params.toString();
-    void goto(`${page.url.pathname}${qs !== '' ? `?${qs}` : ''}`, { invalidateAll: true });
+  function applySearch(): void {
+    navigate({ search: searchInput.trim() });
+  }
+
+  function clearSearch(): void {
+    searchInput = '';
+    navigate({ search: '' });
+  }
+
+  function applyStatusFilter(value: InventoryItemStatus | ''): void {
+    closeAllDropdowns();
+    navigate({ status: value });
   }
 
   function goToItem(uuid: string): void {
     void goto(`/inventory/items/${uuid}`);
   }
 
-  function goToPage(p: number): void {
-    const params = new SvelteURLSearchParams(page.url.searchParams);
-    params.set('page', String(p));
-    void goto(`${page.url.pathname}?${params.toString()}`, { invalidateAll: true });
-  }
-
-  /** Get display value for a custom field from the batch-loaded values */
-  function getCustomValue(itemId: string, fieldId: string, fieldType: string): string {
-    const valuesMap: Partial<Record<string, CustomValueWithField[]>> = customValuesByItem;
-    const values = valuesMap[itemId];
-    if (values === undefined) return '—';
-    const cv = values.find((v: CustomValueWithField) => v.fieldId === fieldId);
+  /**
+   * Display value for a custom field on a row.
+   *
+   * Post-Phase-4.8a (§D17) the backend embeds `customValues` per row, so
+   * this lookup is O(fields-per-item) instead of going through the legacy
+   * `customValuesByItem` sibling map.
+   */
+  function getCustomValue(
+    item: InventoryItemWithCustomValues,
+    fieldId: string,
+    fieldType: string,
+  ): string {
+    const cv = item.customValues.find((v: CustomValueWithField) => v.fieldId === fieldId);
     if (cv === undefined) return '—';
     if (fieldType === 'boolean') return cv.valueBoolean === true ? 'Ja' : 'Nein';
     if (fieldType === 'number' && cv.valueNumber !== null) return cv.valueNumber;
@@ -294,8 +342,8 @@
           </span>
           <span>
             <i class="fas fa-boxes mr-1"></i>
-            {total}
-            {total === 1 ? 'Gegenstand' : 'Gegenstände'}
+            {pagination.total}
+            {pagination.total === 1 ? 'Gegenstand' : 'Gegenstände'}
           </span>
           {#if list.tags.length > 0}
             <span class="inventory-detail__tags">
@@ -324,7 +372,7 @@
             >
               <span>
                 <i class="fas fa-filter mr-2"></i>
-                {filterStatus === '' ? 'Alle Status' : ITEM_STATUS_LABELS[filterStatus]}
+                {urlState.status === '' ? 'Alle Status' : ITEM_STATUS_LABELS[urlState.status]}
               </span>
               <i class="fas fa-chevron-down"></i>
             </button>
@@ -335,11 +383,9 @@
               <button
                 type="button"
                 class="dropdown__option"
-                class:dropdown__option--selected={filterStatus === ''}
+                class:dropdown__option--selected={urlState.status === ''}
                 onclick={() => {
-                  filterStatus = '';
-                  closeAllDropdowns();
-                  applyFilter();
+                  applyStatusFilter('');
                 }}
               >
                 Alle Status
@@ -348,11 +394,9 @@
                 <button
                   type="button"
                   class="dropdown__option"
-                  class:dropdown__option--selected={filterStatus === value}
+                  class:dropdown__option--selected={urlState.status === value}
                   onclick={() => {
-                    filterStatus = value as InventoryItemStatus;
-                    closeAllDropdowns();
-                    applyFilter();
+                    applyStatusFilter(value as InventoryItemStatus);
                   }}
                 >
                   {label}
@@ -369,20 +413,17 @@
                 class="search-input__field"
                 placeholder="Name, Code oder Seriennummer…"
                 autocomplete="off"
-                bind:value={searchQuery}
+                bind:value={searchInput}
                 onkeydown={(e: KeyboardEvent) => {
-                  if (e.key === 'Enter') applyFilter();
+                  if (e.key === 'Enter') applySearch();
                 }}
               />
               <button
                 class="search-input__clear"
-                class:search-input__clear--visible={searchQuery.length > 0}
+                class:search-input__clear--visible={searchInput.length > 0}
                 type="button"
                 aria-label="Suche löschen"
-                onclick={() => {
-                  searchQuery = '';
-                  applyFilter();
-                }}
+                onclick={clearSearch}
               >
                 <i class="fas fa-times"></i>
               </button>
@@ -399,7 +440,7 @@
             </div>
             <h3 class="empty-state__title">Keine Gegenstände</h3>
             <p class="empty-state__description">
-              {#if searchQuery !== '' || filterStatus !== ''}
+              {#if urlState.search !== '' || urlState.status !== ''}
                 Keine Treffer für die aktuellen Filter. Filter zurücksetzen oder neuen Gegenstand
                 anlegen.
               {:else}
@@ -418,7 +459,9 @@
           </div>
         {:else}
           <div class="table-responsive">
-            <table class="data-table data-table--hover data-table--striped">
+            <table
+              class="data-table data-table--hover data-table--striped data-table--actions-hover"
+            >
               <thead>
                 <tr>
                   <th
@@ -490,7 +533,7 @@
                       ><code class="inventory-detail__serial">{item.serial_number ?? '—'}</code></td
                     >
                     {#each fields as field (field.id)}
-                      <td>{getCustomValue(item.id, field.id, field.fieldType)}</td>
+                      <td>{getCustomValue(item, field.id, field.fieldType)}</td>
                     {/each}
                   </tr>
                 {/each}
@@ -498,34 +541,67 @@
             </table>
           </div>
 
-          {#if totalPages > 1}
-            <div class="inventory-detail__pagination">
-              <button
-                type="button"
-                class="btn btn-cancel btn-sm"
-                disabled={currentPage <= 1}
-                onclick={() => {
-                  goToPage(currentPage - 1);
-                }}
-                aria-label="Vorherige Seite"
-              >
-                <i class="fas fa-chevron-left"></i>
-              </button>
-              <span class="text-(--color-text-secondary)">
-                Seite {currentPage} von {totalPages}
-              </span>
-              <button
-                type="button"
-                class="btn btn-cancel btn-sm"
-                disabled={currentPage >= totalPages}
-                onclick={() => {
-                  goToPage(currentPage + 1);
-                }}
-                aria-label="Nächste Seite"
-              >
-                <i class="fas fa-chevron-right"></i>
-              </button>
-            </div>
+          {#if pagination.totalPages > 1}
+            <!-- Anchor pagination per Per-Page DoD §4 — links over button-onclick.
+                 Boundaries (no prev/next) render as `<button disabled>` because
+                 anchors without `href` are not native-disabled. -->
+            <nav
+              class="pagination mt-6"
+              aria-label="Seitennavigation"
+            >
+              {#if pagination.hasPrev}
+                <a
+                  href={pageHref(pagination.page - 1)}
+                  class="pagination__btn pagination__btn--prev"
+                  rel="prev"
+                  aria-label="Vorherige Seite"
+                >
+                  <i class="fas fa-chevron-left"></i>
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--prev"
+                  disabled
+                  aria-label="Vorherige Seite"
+                >
+                  <i class="fas fa-chevron-left"></i>
+                </button>
+              {/if}
+
+              <div class="pagination__pages">
+                {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as p (p)}
+                  <a
+                    href={pageHref(p)}
+                    class="pagination__page"
+                    class:pagination__page--active={p === pagination.page}
+                    aria-current={p === pagination.page ? 'page' : undefined}
+                  >
+                    {p}
+                  </a>
+                {/each}
+              </div>
+
+              {#if pagination.hasNext}
+                <a
+                  href={pageHref(pagination.page + 1)}
+                  class="pagination__btn pagination__btn--next"
+                  rel="next"
+                  aria-label="Nächste Seite"
+                >
+                  <i class="fas fa-chevron-right"></i>
+                </a>
+              {:else}
+                <button
+                  type="button"
+                  class="pagination__btn pagination__btn--next"
+                  disabled
+                  aria-label="Nächste Seite"
+                >
+                  <i class="fas fa-chevron-right"></i>
+                </button>
+              {/if}
+            </nav>
           {/if}
         {/if}
       </div>

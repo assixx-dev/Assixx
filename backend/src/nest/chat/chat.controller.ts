@@ -439,14 +439,19 @@ export class ChatController {
     @CurrentUser() user: NestAuthUser,
     @TenantId() tenantId: number,
   ): Promise<{ documents: Record<string, unknown>[]; total: number }> {
+    // §D18 (2026-05-06): `sort` is now required on the DTO type (server-side
+    // ORDER BY dispatch), and the documents-service wrapper key was renamed
+    // `documents` → `items`. The chat-controller's external response shape
+    // (`{ documents, total }`) is preserved — only the internal access changes.
     const result = await this.documentsService.listDocuments(tenantId, user.id, {
       conversationId: params.id,
       isActive: 1,
       page: 1,
       limit: 100,
+      sort: 'newest',
     });
 
-    return { documents: result.documents, total: result.pagination.total };
+    return { documents: result.items, total: result.pagination.total };
   }
 
   /**

@@ -18,7 +18,6 @@ import type {
   IsActiveStatus,
   FormIsActiveStatus,
   AvailabilityStatus,
-  PaginationPageItem,
   PasswordStrengthResult,
 } from './types';
 
@@ -313,49 +312,19 @@ export function buildAvailabilityPayload(data: AvailabilityFormData): Availabili
 }
 
 // =============================================================================
-// PAGINATION
+// PAGINATION (REMOVED 2026-05-07 — Phase 5.2.2 URL-driven server pagination)
 // =============================================================================
-
-/**
- * Page size for client-side pagination of root users.
- * 25 = same value as manage-admins / manage-employees (consistency).
- * Backend cap is 100 (PaginationSchema.max in common.schema.ts).
- */
-export const ROOTS_PER_PAGE = 25;
-
-/**
- * Compute visible page-button slots with ellipsis gaps.
- *
- * Window of 5 pages around the current page; 1:1 copy of the helper used by
- * manage-admins / manage-employees / /logs so the design-system pagination
- * markup stays identical across the app.
- *
- * @see frontend/src/design-system/primitives/navigation/pagination.css
- */
-export function getVisiblePages(currentPage: number, totalPages: number): PaginationPageItem[] {
-  const pages: PaginationPageItem[] = [];
-
-  let startPage = Math.max(1, currentPage - 2);
-  const endPage = Math.min(totalPages, startPage + 4);
-  startPage = Math.max(1, endPage - 4);
-
-  if (startPage > 1) {
-    pages.push({ type: 'page', value: 1 });
-    if (startPage > 2) {
-      pages.push({ type: 'ellipsis' });
-    }
-  }
-
-  for (let i = startPage; i <= endPage; i++) {
-    pages.push({ type: 'page', value: i, active: i === currentPage });
-  }
-
-  if (endPage < totalPages) {
-    if (endPage < totalPages - 1) {
-      pages.push({ type: 'ellipsis' });
-    }
-    pages.push({ type: 'page', value: totalPages });
-  }
-
-  return pages;
-}
+//
+// `ROOTS_PER_PAGE` (was 25) and `getVisiblePages` (ellipsis page-button
+// computation) were removed in Phase 5.2.2. The page now reads pagination
+// state from the URL via `$lib/utils/url-pagination` and renders anchor
+// pagination via `buildPaginatedHref`. Page size is set in `+page.server.ts`
+// (`PAGE_SIZE = 25`) and shipped to the FE as `data.pagination.limit`.
+//
+// `PaginationPageItem` (the ellipsis-aware UI item type) was removed from
+// `./types`; the new pagination markup iterates `Array.from({length:
+// pagination.totalPages})` directly without the ellipsis logic — matches
+// the manage-dummies (Phase 3), manage-employees (Phase 4.1b) and
+// manage-admins (Phase 4.2) reference impls.
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §5.2.2

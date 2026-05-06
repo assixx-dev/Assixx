@@ -159,23 +159,49 @@
   <!-- Dashboard Data Container - SSR: Data instantly available -->
   <div id="dashboard-data">
     <div class="stats-grid">
-      <div class="card-stat">
+      <!-- Role-specific cards are clickable and navigate to the matching
+           manage-* page. Routes live in different SvelteKit groups
+           (manage-root → (root), manage-admins → (admin), manage-employees
+           → (shared)) — group layouts gate access (ADR-012). -->
+      <a
+        href={resolve('/manage-root')}
+        class="card-stat card-stat--link"
+      >
         <div class="card-stat__icon">
-          <i class="fas fa-user-shield"></i>
+          <!-- Same icon as the Role-Switch trigger's "Root-Ansicht" entry —
+               keeps the visual language consistent across root affordances. -->
+          <span class="material-symbols-outlined">manage_accounts</span>
+        </div>
+        <div class="card-stat__value">{stats.rootCount}</div>
+        <div class="card-stat__label">Root</div>
+      </a>
+      <a
+        href={resolve('/manage-admins')}
+        class="card-stat card-stat--link"
+      >
+        <div class="card-stat__icon">
+          <!-- Mirrors the Role-Switch dropdown's "Admin-Ansicht" icon. -->
+          <span class="material-symbols-outlined">supervisor_account</span>
         </div>
         <div class="card-stat__value">{stats.adminCount}</div>
         <div class="card-stat__label">Admins</div>
-      </div>
-      <div class="card-stat">
+      </a>
+      <a
+        href={resolve('/manage-employees')}
+        class="card-stat card-stat--link"
+      >
         <div class="card-stat__icon">
-          <i class="fas fa-users"></i>
+          <!-- Mirrors the Role-Switch dropdown's "Mitarbeiter-Ansicht" icon. -->
+          <span class="material-symbols-outlined">person_apron</span>
         </div>
         <div class="card-stat__value">{stats.employeeCount}</div>
         <div class="card-stat__label">Mitarbeiter</div>
-      </div>
+      </a>
       <div class="card-stat">
         <div class="card-stat__icon">
-          <i class="fas fa-user-friends"></i>
+          <!-- All 4 stat-card icons use Material Symbols for visual
+               consistency (same font, same metric box, same opsz axis). -->
+          <span class="material-symbols-outlined">groups</span>
         </div>
         <div class="card-stat__value">{stats.totalUsers}</div>
         <div class="card-stat__label">Gesamte Benutzer</div>
@@ -201,7 +227,7 @@
     <div class="card__body">
       <div class="table-responsive">
         <table
-          class="data-table data-table--hover data-table--striped"
+          class="data-table data-table--hover data-table--striped data-table--actions-hover"
           id="activity-logs-table"
         >
           <thead>
@@ -253,6 +279,38 @@
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
     gap: var(--spacing-6);
     margin-bottom: 32px;
+  }
+
+  /* Clickable stat cards (Root / Admins / Mitarbeiter)
+   * WHY: <a> defaults (color, underline) clash with .card-stat's centered
+   * KPI styling. Reset link defaults so the anchor visually matches a
+   * non-clickable .card-stat, then add cursor:pointer + lift on hover to
+   * signal interactivity. .card-stat:hover already shifts the border. */
+  .card-stat--link {
+    display: block;
+    cursor: pointer;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .card-stat--link:hover {
+    color: inherit;
+    text-decoration: none;
+    transform: translateY(-2px);
+  }
+
+  /* All 4 stat-card icons are Material Symbols. Parent .card-stat__icon
+   * sets `font-size: 2rem` (32px); we scale up by ~20% (2.4rem ≈ 38.4px)
+   * for better visual weight in the KPI tiles. opsz 40 matches the new
+   * size on the optical-size axis so the glyph stays sharp. */
+  #dashboard-data .card-stat__icon :global(.material-symbols-outlined) {
+    font-size: 2.4rem;
+    line-height: 1;
+    font-variation-settings:
+      'FILL' 0,
+      'wght' 400,
+      'GRAD' 0,
+      'opsz' 40;
   }
 
   /* Stat Value - Large number display
