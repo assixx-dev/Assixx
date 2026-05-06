@@ -10,13 +10,11 @@ import type {
   AssignUsersPayload,
   CreateWorkOrderPayload,
   EligibleUser,
-  PaginatedResponse,
   UpdateStatusPayload,
   UpdateWorkOrderPayload,
   WorkOrder,
   WorkOrderAssignee,
   WorkOrderComment,
-  WorkOrderListItem,
   WorkOrderPhoto,
   WorkOrderStats,
 } from './types';
@@ -28,7 +26,24 @@ const apiClient = getApiClient();
 // HELPER FUNCTIONS
 // =============================================================================
 
-const EMPTY_PAGE: PaginatedResponse<never> = {
+/**
+ * Local return shape for `extractPaginated` — kept ONLY for `fetchComments`
+ * below, which still consumes the legacy flat `{ items, total, page, pageSize }`
+ * envelope from `WorkOrderCommentsService.listComments` (same drift class as the
+ * pre-Phase-4.7a list endpoints; comments rarely > 20 in practice → not a Beta
+ * blocker, deferred to V2).
+ *
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Known Limitations" #10
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Spec Deviations" D15
+ */
+interface LegacyCommentsPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+const EMPTY_PAGE: LegacyCommentsPage<never> = {
   items: [],
   total: 0,
   page: 1,
@@ -39,8 +54,8 @@ function numberOr(val: unknown, fallback: number): number {
   return typeof val === 'number' ? val : fallback;
 }
 
-/** Type-safe extraction of paginated data from API response */
-function extractPaginated<T>(result: unknown): PaginatedResponse<T> {
+/** Type-safe extraction of paginated data from API response (legacy comments envelope only) */
+function extractPaginated<T>(result: unknown): LegacyCommentsPage<T> {
   if (result === null || typeof result !== 'object') return EMPTY_PAGE;
   const obj = result as Record<string, unknown>;
   const items =
@@ -69,54 +84,14 @@ export async function fetchWorkOrder(uuid: string): Promise<WorkOrder> {
   return await apiClient.get<WorkOrder>(`/work-orders/${uuid}`);
 }
 
-/** Append non-empty filter values to URLSearchParams */
-function applyFilters(params: URLSearchParams, filters: Record<string, string | undefined>): void {
-  for (const [key, val] of Object.entries(filters)) {
-    if (val !== undefined && val !== '') {
-      params.set(key, val);
-    }
-  }
-}
-
-/** Fetch paginated list of all work orders (admin view) */
-export async function fetchWorkOrders(
-  page = 1,
-  limit = 20,
-  filters: {
-    status?: string;
-    priority?: string;
-    sourceType?: string;
-    assigneeUuid?: string;
-    isActive?: string;
-    overdue?: string;
-  } = {},
-): Promise<PaginatedResponse<WorkOrderListItem>> {
-  const params = new URLSearchParams();
-  params.set('page', String(page));
-  params.set('limit', String(limit));
-  applyFilters(params, filters);
-
-  const result: unknown = await apiClient.get(`/work-orders?${params.toString()}`);
-  return extractPaginated<WorkOrderListItem>(result);
-}
-
-/** Fetch paginated list of work orders assigned to current user */
-export async function fetchMyWorkOrders(
-  page = 1,
-  limit = 20,
-  filters: {
-    status?: string;
-    priority?: string;
-  } = {},
-): Promise<PaginatedResponse<WorkOrderListItem>> {
-  const params = new URLSearchParams();
-  params.set('page', String(page));
-  params.set('limit', String(limit));
-  applyFilters(params, filters);
-
-  const result: unknown = await apiClient.get(`/work-orders/my?${params.toString()}`);
-  return extractPaginated<WorkOrderListItem>(result);
-}
+// Phase 4.7b (2026-05-06): `fetchWorkOrders` + `fetchMyWorkOrders` + `applyFilters`
+// removed. Both list views now load via `apiFetchPaginatedWithPermission` from
+// `+page.server.ts` (SSR), so the client-side fetchers were dead post-migration.
+// `extractPaginated` is intentionally retained for `fetchComments` only — see
+// the LegacyCommentsPage<T> JSDoc above for the V2 boundary (Known Limitation #10).
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Migration order" row 4.7
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Spec Deviations" D15
 
 /** Update a work order (admin only) */
 export async function updateWorkOrder(

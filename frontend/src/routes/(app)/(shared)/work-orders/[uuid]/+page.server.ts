@@ -13,12 +13,28 @@ import { buildLoginUrl } from '$lib/utils/build-apex-url';
 import type { PageServerLoad } from './$types';
 import type {
   PaginatedComments,
-  PaginatedResponse,
   SourcePhoto,
   WorkOrder,
   WorkOrderComment,
   WorkOrderPhoto,
 } from '../_lib/types';
+
+/**
+ * Legacy flat comments envelope — `WorkOrderCommentsService.listComments` still
+ * returns `{ items, total, page, pageSize }` without the canonical ADR-007
+ * `pagination` block. Phase 4.7b (changelog 1.19.0) renamed only the list
+ * endpoints (`/work-orders` + `/work-orders/my`); the comments envelope is
+ * deferred to V2 because comments per work-order rarely exceed 20 in practice.
+ *
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Known Limitations" #10
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Spec Deviations" D15
+ */
+interface LegacyCommentsEnvelope<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
 async function fetchSourcePhotos(
   workOrder: WorkOrder,
@@ -38,7 +54,7 @@ async function fetchSourcePhotos(
   return Array.isArray(result) ? result : [];
 }
 
-function buildComments(data: PaginatedResponse<WorkOrderComment> | null): PaginatedComments {
+function buildComments(data: LegacyCommentsEnvelope<WorkOrderComment> | null): PaginatedComments {
   const raw = data ?? { items: [] as WorkOrderComment[], total: 0 };
   return {
     comments: raw.items,
@@ -60,7 +76,7 @@ export const load: PageServerLoad = async ({ cookies, fetch, params, parent, url
 
   const [workOrderResult, commentsData, photosData] = await Promise.all([
     apiFetchWithPermission<WorkOrder>(`/work-orders/${uuid}`, token, fetch),
-    apiFetch<PaginatedResponse<WorkOrderComment>>(
+    apiFetch<LegacyCommentsEnvelope<WorkOrderComment>>(
       `/work-orders/${uuid}/comments?page=1&limit=50`,
       token,
       fetch,

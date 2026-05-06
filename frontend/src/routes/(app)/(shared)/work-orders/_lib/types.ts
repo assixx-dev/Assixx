@@ -176,11 +176,14 @@ export interface AssignUsersPayload {
 // =============================================================================
 // API RESPONSE TYPES
 // =============================================================================
-
-/** Paginated list response */
-export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
+//
+// Phase 4.7b (2026-05-06): `PaginatedResponse<T>` removed.
+// - List views now consume `PaginatedResult<T>` from `$lib/server/api-fetch`
+//   (canonical ADR-007 envelope: `data: T[]` + `pagination: { page, limit, total, totalPages, hasNext, hasPrev }`).
+// - The legacy flat shape `{ items, total, page, pageSize }` survives only inside
+//   `_lib/api.ts` as a private `LegacyCommentsPage<T>` for `fetchComments` —
+//   the comments envelope is deferred to V2 (Known Limitation #10).
+//
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Migration order" row 4.7
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Spec Deviations" D15
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §"Known Limitations" #10
