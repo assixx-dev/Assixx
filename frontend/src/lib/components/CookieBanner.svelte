@@ -243,14 +243,19 @@
 
     max-width: 720px;
 
-    /* Border colour explicit per design review (deeper primary tone, frames
-       the glass card more prominently than the default --color-glass-border). */
+    /* Border + glow colours are theme-scoped — see :global(html.dark) override
+       below. Light mode: deep brand blue frames the glass against bright app
+       chrome. Dark mode: near-white stroke for contrast against the dark glass.
+       Glow shadow stacks on top of --shadow-glass to keep depth from the DS. */
     border: 1px solid #0a6fd6;
     border-radius: var(--radius-xl);
 
     background: color-mix(in oklch, var(--main-bg) 92%, transparent);
     backdrop-filter: blur(20px) saturate(180%);
-    box-shadow: var(--shadow-glass);
+    box-shadow:
+      0 0 0 1px oklch(65% 0.169 248.81 / 18%),
+      0 12px 40px -8px oklch(55% 0.17 250 / 35%),
+      var(--shadow-glass);
 
     color: var(--color-text-primary);
     font-family: var(--font-primary);
@@ -258,6 +263,13 @@
     /* Slide-up + fade-in on mount. CSS keyframes — no JS runtime, respects
        reduced-motion via the @media block at the bottom of this stylesheet. */
     animation: cookie-banner-in 320ms cubic-bezier(0.33, 1, 0.68, 1) both;
+  }
+
+  /* Dark mode: swap the blue stroke for a near-white border so the card
+     reads against the dark glass, while keeping the blue glow stack so the
+     brand accent is preserved in both themes. */
+  :global(html.dark) .cookie-banner {
+    border-color: oklch(100% 0 0 / 22%);
   }
 
   @keyframes cookie-banner-in {
