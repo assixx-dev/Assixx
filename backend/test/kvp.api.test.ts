@@ -588,6 +588,116 @@ describe('KVP: Delete Suggestion', () => {
   });
 });
 
+// ---- seq: 10b -- Pagination (Step 5.1) --------------------------------------
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14b, 2026-05-06):
+// 4 mandated assertions per migrated endpoint (slice / cross-page search /
+// combined / RLS sanity), mirroring Session 14a (dummy-users/users/assets/approvals).
+// Search column: `s.title OR s.description` (kvp.helpers.ts:428).
+// Seeding 22 suggestions with a unique `title` tag scopes search results
+// deterministically; 22 = 2 × limit + 2 guarantees totalPages >= 3, so the
+// "matches beyond page 1" assertion is structural, not coincidental.
+// Daily-limit trigger (`trg_kvp_daily_limit`) only applies to employee role —
+// apitest user is admin/root, unlimited (per migration 009).
+// Placed BEFORE the `KVP: Participants` block so seeding runs while the kvp
+// addon is still active (Participants nests an addon-disabled subblock).
+describe('KVP: Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededIds: number[] = [];
+
+  beforeAll(async () => {
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/kvp`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          title: `${tag}_${String(i).padStart(2, '0')}`,
+          description: 'Pagination seed — deleted by afterAll',
+          categoryId: 1,
+          priority: 'normal',
+          expectedBenefit: 'Test benefit for pagination seed',
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: kvp ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededIds.push(body.data.id as number);
+    }
+  });
+
+  afterAll(async () => {
+    for (const id of seededIds) {
+      await fetch(`${BASE_URL}/kvp/${id}`, {
+        method: 'DELETE',
+        headers: authOnly(auth.authToken),
+      });
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ title: string }>) {
+      expect(item.title).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(`${BASE_URL}/kvp?search=${tag}&limit=100`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedIds = (body.data as Array<{ id: number }>).map((d) => d.id).sort((a, b) => a - b);
+    const expectedIds = [...seededIds].sort((a, b) => a - b);
+    expect(returnedIds).toEqual(expectedIds);
+  });
+});
+
 // ---- seq: 11 -- KVP Participants (FEAT_KVP_PARTICIPANTS_MASTERPLAN Phase 4) --
 //
 // API integration coverage for the participant-tagging feature. Reuses the

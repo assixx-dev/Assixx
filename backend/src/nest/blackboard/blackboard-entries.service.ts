@@ -20,7 +20,6 @@ import {
 import type {
   BlackboardEntryResponse,
   BlackboardMyPermissions,
-  CountResult,
   DbBlackboardEntry,
   EntryFilters,
   NormalizedFilters,
@@ -175,12 +174,24 @@ export class BlackboardEntriesService {
 
   /** Count total entries matching query */
   private async countEntries(query: string, params: unknown[]): Promise<number> {
+    // The /s (dotAll) flag is REQUIRED — `FETCH_ENTRIES_BASE_QUERY` is a
+    // multi-line template literal (blackboard.constants.ts:39), so without it
+    // `.*` cannot span the SELECT clause and the regex silently fails to
+    // match. countQuery would then equal the original (rows-returning) query,
+    // `rows[0]?.total` is undefined, and total falls through to 0 — the
+    // pagination block ships `total: 0` regardless of how many entries match.
+    // Latent since the rebuild; surfaced by FEAT_SERVER_DRIVEN_PAGINATION
+    // §Step 5.1 (Session 14b, 2026-05-06). pg-driver coerces COUNT(*) to a
+    // string so we wrap with Number() — mirrors Session 8a kvp pattern.
     const countQuery = query.replace(
-      /SELECT e\.id.*FROM blackboard_entries e/,
+      /SELECT e\.id.*FROM blackboard_entries e/s,
       'SELECT COUNT(*) as total FROM blackboard_entries e',
     );
-    const rows = await this.db.tenantQuery<CountResult>(countQuery, params);
-    return rows[0]?.total ?? 0;
+    // pg-driver returns COUNT(*) as STRING for bigint columns. The CountResult
+    // interface declares `total: number` (a type-lie); use `string | number`
+    // here to honour the runtime shape, mirrors kvp.service.ts:330 (Session 8a).
+    const rows = await this.db.tenantQuery<{ total: string | number }>(countQuery, params);
+    return Number(rows[0]?.total ?? 0);
   }
 
   /** Fetch paginated entries with sorting */
