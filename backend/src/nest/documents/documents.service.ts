@@ -74,15 +74,54 @@ export type DocumentResponse = Record<string, unknown>;
 
 /**
  * Paginated result type
+ *
+ * Phase 4.9a (2026-05-06): wrapper key renamed `documents` → `items` so that
+ * `ResponseInterceptor.isPaginatedResponse()` (response.interceptor.ts:71-73)
+ * recognises the shape and emits the canonical ADR-007 envelope with
+ * `meta.pagination`. Pre-rename, the wrapper key was unrecognised → interceptor
+ * returned false → the entire object passed through naively as `data`,
+ * silently hiding the pagination metadata. Same drift class as KVP §D9
+ * (`suggestions`).
+ *
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §D18
+ * @see docs/infrastructure/adr/ADR-007-api-response-standardization.md
  */
 export interface PaginatedDocumentsResult {
-  documents: DocumentResponse[];
+  items: DocumentResponse[];
   pagination: {
     page: number;
     limit: number;
     total: number;
     totalPages: number;
   };
+}
+
+/** Sort options for the documents list — mirrors the DTO enum. */
+type DocumentSort = 'newest' | 'oldest' | 'name' | 'size';
+
+/**
+ * Build the ORDER BY clause for the documents list query.
+ *
+ * Phase 4.9a (2026-05-06): server-side dispatch over the four sort options that
+ * the FE used to apply client-side in `_lib/filters.ts:78`. All branches append
+ * a deterministic tiebreaker (`d.id ASC`) to prevent pagination drift on ties
+ * (rows with identical sort-key values would otherwise reshuffle across pages).
+ *
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §D18 (sort scope-bundling
+ * rationale: dropping the UI was rejected per §D11 anti-dishonest-UI rule).
+ */
+function buildDocumentsOrderByClause(sort: DocumentSort | undefined): string {
+  switch (sort) {
+    case 'oldest':
+      return 'ORDER BY d.uploaded_at ASC NULLS LAST, d.id ASC';
+    case 'name':
+      return 'ORDER BY d.filename ASC, d.id ASC';
+    case 'size':
+      return 'ORDER BY d.file_size DESC NULLS LAST, d.id ASC';
+    default:
+      // 'newest' (DTO default) and any unexpected fallthrough.
+      return 'ORDER BY d.uploaded_at DESC NULLS LAST, d.id ASC';
+  }
 }
 
 /**
@@ -223,7 +262,9 @@ export class DocumentsService {
     );
     const total = await getDocumentsCount(this.databaseService, baseQuery, params);
 
-    const paginatedQuery = `${baseQuery} ORDER BY d.uploaded_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    // §D18: server-side ORDER BY dispatch (was hardcoded `uploaded_at DESC` pre-4.9a).
+    const orderBy = buildDocumentsOrderByClause(query.sort);
+    const paginatedQuery = `${baseQuery} ${orderBy} LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     const documents = await this.databaseService.tenantQuery<DbDocument>(paginatedQuery, [
       ...params,
       limit,
@@ -236,8 +277,11 @@ export class DocumentsService {
       }),
     );
 
+    // §D9 / §D18: wrapper key `items` (was `documents` pre-4.9a) so that
+    // ResponseInterceptor.isPaginatedResponse() recognises the shape and
+    // emits the canonical ADR-007 envelope with meta.pagination.
     return {
-      documents: apiDocuments,
+      items: apiDocuments,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
