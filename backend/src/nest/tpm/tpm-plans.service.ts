@@ -43,12 +43,24 @@ export interface IntervalMatrixEntry {
   overdueCount: number;
 }
 
-/** Paginated plan list response */
+/**
+ * Paginated plan list response — ADR-007 canonical envelope.
+ *
+ * Why this shape: Phase 4.11a (2026-05-06, FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §D21)
+ * rebuilt the legacy `{data, total, page, pageSize}` to the §D15-canonical form
+ * because the old shape failed `ResponseInterceptor.isPaginatedResponse` (gate at
+ * `response.interceptor.ts:65` requires `'pagination' in data`) ⇒ `meta.pagination`
+ * was never emitted on `GET /tpm/plans`. Mirrors §3.1 dummy-users + §4.5a kvp +
+ * §4.7a work-orders + §4.10a surveys rebuild precedent.
+ */
 export interface PaginatedPlans {
-  data: TpmPlan[];
-  total: number;
-  page: number;
-  pageSize: number;
+  items: TpmPlan[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 // ============================================================================
@@ -269,11 +281,16 @@ export class TpmPlansService {
       [tenantId, pageSize, offset, ...selectQ.params],
     );
 
+    // ADR-007 canonical envelope (§4.11a §D21). `totalPages` math mirrors
+    // §3.1 dummy-users precedent: `total === 0 ? 0 : Math.ceil(total/limit)`.
     return {
-      data: rows.map(mapPlanRowToApi),
-      total,
-      page,
-      pageSize,
+      items: rows.map(mapPlanRowToApi),
+      pagination: {
+        page,
+        limit: pageSize,
+        total,
+        totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+      },
     };
   }
 

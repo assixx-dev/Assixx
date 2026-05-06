@@ -174,10 +174,13 @@ describe('TpmCardsService', () => {
 
       const result = await service.listCardsForAsset(10, 'asset-uuid-001');
 
-      expect(result.total).toBe(5);
-      expect(result.data).toHaveLength(2);
-      expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(50);
+      // Phase 4.11a (§D21): canonical envelope `{items, pagination: {page, limit, total, totalPages}}`.
+      expect(result.pagination.total).toBe(5);
+      expect(result.items).toHaveLength(2);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(50);
+      // totalPages math: total=5, limit=50 ⇒ ceil(5/50)=1
+      expect(result.pagination.totalPages).toBe(1);
     });
 
     it('should return empty list when no cards exist', async () => {
@@ -186,8 +189,10 @@ describe('TpmCardsService', () => {
 
       const result = await service.listCardsForAsset(10, 'asset-uuid-001');
 
-      expect(result.total).toBe(0);
-      expect(result.data).toHaveLength(0);
+      expect(result.pagination.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+      // §3.1 special-case: total=0 ⇒ totalPages=0.
+      expect(result.pagination.totalPages).toBe(0);
     });
 
     it('should apply status filter', async () => {
@@ -230,8 +235,9 @@ describe('TpmCardsService', () => {
 
       const result = await service.listCardsForPlan(10, 'plan-uuid-001');
 
-      expect(result.total).toBe(3);
-      expect(result.data).toHaveLength(1);
+      // Phase 4.11a (§D21): canonical envelope.
+      expect(result.pagination.total).toBe(3);
+      expect(result.items).toHaveLength(1);
     });
 
     it('should handle null count result', async () => {
@@ -240,7 +246,7 @@ describe('TpmCardsService', () => {
 
       const result = await service.listCardsForPlan(10, 'plan-uuid-001');
 
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
     });
   });
 
@@ -258,9 +264,12 @@ describe('TpmCardsService', () => {
 
       const result = await service.getCardsByStatus(10, 'red');
 
-      expect(result.total).toBe(2);
-      expect(result.data).toHaveLength(2);
-      expect(result.pageSize).toBe(20);
+      // Phase 4.11a (§D21): canonical envelope.
+      expect(result.pagination.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+      expect(result.pagination.limit).toBe(20);
+      // totalPages math: total=2, limit=20 ⇒ ceil(2/20)=1
+      expect(result.pagination.totalPages).toBe(1);
     });
 
     it('should apply correct offset for page 2', async () => {

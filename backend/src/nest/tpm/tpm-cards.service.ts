@@ -56,12 +56,26 @@ export interface CardListFilter {
   search?: string;
 }
 
-/** Paginated card list response */
+/**
+ * Paginated card list response — ADR-007 canonical envelope.
+ *
+ * Why this shape: Phase 4.11a (2026-05-06, FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §D21)
+ * rebuilt the legacy `{data, total, page, pageSize}` to the canonical form because
+ * the old shape failed `ResponseInterceptor.isPaginatedResponse` (`response.interceptor.ts:65`
+ * requires `'pagination' in data`) ⇒ `meta.pagination` was never emitted on `GET /tpm/cards`.
+ * Single edit to `executePaginatedQuery` (the central helper, ~line 490+) covers all
+ * three list callsites (listCardsForAsset / listCardsForPlan / getCardsByStatus) plus
+ * the cross-module `GET /tpm/plans/:uuid/board` route in `tpm-plans.controller.ts:467`
+ * which also returns this shape. Mirrors §D15 work-orders precedent.
+ */
 export interface PaginatedCards {
-  data: TpmCard[];
-  total: number;
-  page: number;
-  pageSize: number;
+  items: TpmCard[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 /** Base SELECT for card reads with all JOINs */
@@ -514,11 +528,17 @@ export class TpmCardsService {
       [...baseParams, pageSize, offset],
     );
 
+    // ADR-007 canonical envelope (§4.11a §D21). Single edit here covers all
+    // three callers (asset/plan/status) plus the `/tpm/plans/:uuid/board` route.
+    // `totalPages` math mirrors §3.1 dummy-users: `total === 0 ? 0 : Math.ceil(total/limit)`.
     return {
-      data: rows.map(mapCardRowToApi),
-      total,
-      page,
-      pageSize,
+      items: rows.map(mapCardRowToApi),
+      pagination: {
+        page,
+        limit: pageSize,
+        total,
+        totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+      },
     };
   }
 }

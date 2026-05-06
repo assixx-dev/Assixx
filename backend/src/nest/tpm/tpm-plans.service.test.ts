@@ -171,10 +171,13 @@ describe('TpmPlansService', () => {
 
       const result = await service.listPlans(10, 1, 20, FULL_ACCESS_USER);
 
-      expect(result.total).toBe(3);
-      expect(result.data).toHaveLength(2);
-      expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(20);
+      // Phase 4.11a (§D21): canonical envelope `{items, pagination: {page, limit, total, totalPages}}`.
+      expect(result.pagination.total).toBe(3);
+      expect(result.items).toHaveLength(2);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(20);
+      // totalPages math: total=3, limit=20 ⇒ ceil(3/20)=1
+      expect(result.pagination.totalPages).toBe(1);
     });
 
     it('should return empty list when no plans exist', async () => {
@@ -183,8 +186,10 @@ describe('TpmPlansService', () => {
 
       const result = await service.listPlans(10, 1, 20, FULL_ACCESS_USER);
 
-      expect(result.total).toBe(0);
-      expect(result.data).toHaveLength(0);
+      expect(result.pagination.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+      // §3.1 special-case: total=0 ⇒ totalPages=0 (not 1).
+      expect(result.pagination.totalPages).toBe(0);
     });
 
     it('should handle null count result', async () => {
@@ -193,7 +198,7 @@ describe('TpmPlansService', () => {
 
       const result = await service.listPlans(10, 1, 20, FULL_ACCESS_USER);
 
-      expect(result.total).toBe(0);
+      expect(result.pagination.total).toBe(0);
     });
 
     it('should use default pagination values', async () => {
@@ -202,8 +207,8 @@ describe('TpmPlansService', () => {
 
       const result = await service.listPlans(10, 1, 20, FULL_ACCESS_USER);
 
-      expect(result.page).toBe(1);
-      expect(result.pageSize).toBe(20);
+      expect(result.pagination.page).toBe(1);
+      expect(result.pagination.limit).toBe(20);
     });
 
     it('should apply correct offset for page 2', async () => {

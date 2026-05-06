@@ -160,15 +160,54 @@ describe('TPM: List Plans', () => {
     expect(res.status).toBe(200);
   });
 
-  it('should return plans array', () => {
-    expect(Array.isArray(body.data.data)).toBe(true);
-    expect(body.data.data.length).toBeGreaterThanOrEqual(1);
+  // Phase 4.11a (§D21): ADR-007 canonical envelope — `body.data` IS the items array,
+  // `body.meta.pagination` carries the pagination block.
+  it('should return plans as ADR-007 canonical envelope (§D21)', () => {
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as JsonBody[]).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should return pagination meta', () => {
-    expect(body.data.total).toBeDefined();
-    expect(typeof body.data.total).toBe('number');
-    expect(body.data.page).toBe(1);
+  it('should return canonical pagination meta (§D21)', () => {
+    expect(body.meta).toBeDefined();
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag).toBeDefined();
+    expect(pag.page).toBe(1);
+    expect(pag.limit).toBe(10);
+    expect(typeof pag.total).toBe('number');
+    expect(typeof pag.totalPages).toBe('number');
+  });
+});
+
+// ---- seq: 3b -- List Plans page-2 boundary + totalPages math (§D21) ------------
+
+describe('TPM: List Plans — Canonical Envelope page=2 (§D21)', () => {
+  let res: Response;
+  let body: JsonBody;
+
+  beforeAll(async () => {
+    // §10c precedent: assert canonical envelope holds + totalPages math is correct
+    // when page is beyond available data (test tenant currently has 1 plan).
+    res = await fetch(`${BASE_URL}/tpm/plans?page=2&limit=10`, {
+      headers: authOnly(auth.authToken),
+    });
+    body = (await res.json()) as JsonBody;
+  });
+
+  it('should return 200 OK with canonical envelope on empty page', () => {
+    expect(res.status).toBe(200);
+    expect(Array.isArray(body.data)).toBe(true);
+  });
+
+  it('should echo requested page=2 limit=10 in meta.pagination', () => {
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag.page).toBe(2);
+    expect(pag.limit).toBe(10);
+  });
+
+  it('should compute totalPages = total === 0 ? 0 : ceil(total/limit) (§3.1 math)', () => {
+    const pag = body.meta.pagination as { total: number; limit: number; totalPages: number };
+    const expected = pag.total === 0 ? 0 : Math.ceil(pag.total / pag.limit);
+    expect(pag.totalPages).toBe(expected);
   });
 });
 
@@ -339,7 +378,8 @@ describe('TPM Approval: approvalStatus in list plans', () => {
   });
 
   it('should include approvalStatus field on plans', () => {
-    const plans = body.data?.data as JsonBody[];
+    // §D21: top-level body.data is now the items array (ADR-007 canonical envelope).
+    const plans = body.data as JsonBody[];
     const plan = plans.find((p: JsonBody) => p.uuid === planUuid);
     expect(plan).toBeDefined();
     expect(plan!.approvalStatus).toBe('pending');
@@ -536,14 +576,53 @@ describe('TPM: List Cards by Plan', () => {
     expect(res.status).toBe(200);
   });
 
-  it('should return cards array with at least 1 card', () => {
-    expect(Array.isArray(body.data.data)).toBe(true);
-    expect(body.data.data.length).toBeGreaterThanOrEqual(1);
+  // Phase 4.11a (§D21): ADR-007 canonical envelope.
+  it('should return cards as ADR-007 canonical envelope (§D21)', () => {
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as JsonBody[]).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should return pagination info', () => {
-    expect(body.data.total).toBeDefined();
-    expect(typeof body.data.total).toBe('number');
+  it('should return canonical pagination meta (§D21)', () => {
+    expect(body.meta).toBeDefined();
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag).toBeDefined();
+    expect(pag.page).toBe(1);
+    expect(pag.limit).toBe(20);
+    expect(typeof pag.total).toBe('number');
+    expect(typeof pag.totalPages).toBe('number');
+  });
+});
+
+// ---- seq: 10b -- List Cards page-2 boundary + totalPages math (§D21) -----------
+
+describe('TPM: List Cards — Canonical Envelope page=2 (§D21)', () => {
+  let res: Response;
+  let body: JsonBody;
+
+  beforeAll(async () => {
+    // Tests cross-module shape: this hits `/tpm/cards`, but the §D21 fix also covers
+    // the cross-controller `/tpm/plans/:uuid/board` route (asserted in TPM: Board Data).
+    res = await fetch(`${BASE_URL}/tpm/cards?planUuid=${planUuid}&page=2&limit=10`, {
+      headers: authOnly(auth.authToken),
+    });
+    body = (await res.json()) as JsonBody;
+  });
+
+  it('should return 200 OK with canonical envelope on empty page', () => {
+    expect(res.status).toBe(200);
+    expect(Array.isArray(body.data)).toBe(true);
+  });
+
+  it('should echo requested page=2 limit=10 in meta.pagination', () => {
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag.page).toBe(2);
+    expect(pag.limit).toBe(10);
+  });
+
+  it('should compute totalPages = total === 0 ? 0 : ceil(total/limit) (§3.1 math)', () => {
+    const pag = body.meta.pagination as { total: number; limit: number; totalPages: number };
+    const expected = pag.total === 0 ? 0 : Math.ceil(pag.total / pag.limit);
+    expect(pag.totalPages).toBe(expected);
   });
 });
 
@@ -635,14 +714,21 @@ describe('TPM: Board Data', () => {
     expect(res.status).toBe(200);
   });
 
-  it('should return cards array', () => {
-    expect(Array.isArray(body.data.data)).toBe(true);
-    expect(body.data.data.length).toBeGreaterThanOrEqual(1);
+  // Phase 4.11a (§D21): cross-module check — `/tpm/plans/:uuid/board` ALSO returns
+  // `PaginatedCards` (line 467 in tpm-plans.controller.ts calls listCardsForPlan).
+  // The single shape change in tpm-cards.service.ts:executePaginatedQuery covers this.
+  it('should return cards array via canonical envelope (§D21)', () => {
+    expect(Array.isArray(body.data)).toBe(true);
+    expect((body.data as JsonBody[]).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('should return pagination info', () => {
-    expect(body.data.total).toBeDefined();
-    expect(typeof body.data.total).toBe('number');
+  it('should return canonical pagination meta on cross-module route (§D21)', () => {
+    expect(body.meta).toBeDefined();
+    const pag = body.meta.pagination as Record<string, unknown>;
+    expect(pag).toBeDefined();
+    expect(typeof pag.total).toBe('number');
+    expect(pag.page).toBe(1);
+    expect(pag.limit).toBe(50);
   });
 });
 
