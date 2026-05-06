@@ -257,3 +257,105 @@ describe('Assets: Delete (Admin)', () => {
     }
   });
 });
+
+// ---- seq: 10 -- Pagination (Step 5.1) ---------------------------------------
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14, 2026-05-06):
+// 4 mandated assertions per migrated endpoint (slice / search beyond page 1 /
+// combined / RLS sanity). Search hits `name OR model OR manufacturer OR
+// serial_number OR asset_number` (assets.helpers.ts:72). Seeding 22 assets
+// with a unique `name` tag scopes search results deterministically.
+describe('Assets: Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededIds: number[] = [];
+
+  beforeAll(async () => {
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/assets`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          name: `${tag}_${String(i).padStart(2, '0')}`,
+          assetType: 'production',
+          status: 'operational',
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: asset ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededIds.push(body.data.id as number);
+    }
+  });
+
+  afterAll(async () => {
+    for (const id of seededIds) {
+      await fetch(`${BASE_URL}/assets/${id}`, {
+        method: 'DELETE',
+        headers: authOnly(auth.authToken),
+      });
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/assets?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ name: string }>) {
+      expect(item.name).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${BASE_URL}/assets?search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${BASE_URL}/assets?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ name: string }>) {
+      expect(item.name).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(`${BASE_URL}/assets?search=${tag}&limit=100`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedIds = (body.data as Array<{ id: number }>).map((d) => d.id).sort((a, b) => a - b);
+    const expectedIds = [...seededIds].sort((a, b) => a - b);
+    expect(returnedIds).toEqual(expectedIds);
+  });
+});

@@ -316,3 +316,120 @@ describe('Users: Get User Profile', () => {
     expect(user).toHaveProperty('firstName');
   });
 });
+
+// ---- seq: 7 -- Pagination (Step 5.1) ----------------------------------------
+//
+// FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §Step 5.1 (Session 14, 2026-05-06):
+// 4 mandated assertions per migrated endpoint. /users search hits
+// `first_name OR last_name OR email` (users.helpers.ts:182). Seeding 22
+// employees with a unique `lastName` tag scopes search results deterministically.
+// Cleanup via DELETE /users/:id (soft-delete is_active=DELETED), mirrors the
+// existing 'Users: Create with positionIds' afterAll pattern (lines 160-167).
+
+describe('Users: Pagination (Step 5.1)', () => {
+  const tag = `Pg5_1_${Date.now()}`;
+  const seedCount = 22;
+  const limit = 10;
+  const seededIds: number[] = [];
+  let positionId: string;
+
+  beforeAll(async () => {
+    // Resolve employee position UUID (FK requirement on POST /users, line 156).
+    const posRes = await fetch(`${BASE_URL}/organigram/positions?roleCategory=employee`, {
+      headers: authOnly(auth.authToken),
+    });
+    const posBody = (await posRes.json()) as JsonBody;
+    const positions = posBody.data as { id: string }[];
+    if (positions[0] === undefined) throw new Error('No employee positions found');
+    positionId = positions[0].id;
+
+    for (let i = 0; i < seedCount; i++) {
+      const res = await fetch(`${BASE_URL}/users`, {
+        method: 'POST',
+        headers: authHeaders(auth.authToken),
+        body: JSON.stringify({
+          email: `pgtest_${tag}_${String(i).padStart(2, '0')}@assixx.com`,
+          password: 'TestPass123!',
+          firstName: 'PgTest',
+          lastName: `${tag}_${String(i).padStart(2, '0')}`,
+          role: 'employee',
+          positionIds: [positionId],
+        }),
+      });
+      if (res.status !== 201) {
+        const text = await res.text();
+        throw new Error(`Pagination seed: user ${i} failed ${res.status} — ${text}`);
+      }
+      const body = (await res.json()) as JsonBody;
+      seededIds.push(body.data.id as number);
+    }
+  });
+
+  afterAll(async () => {
+    for (const id of seededIds) {
+      await fetch(`${BASE_URL}/users/${id}`, {
+        method: 'DELETE',
+        headers: authOnly(auth.authToken),
+      });
+    }
+  });
+
+  it('?page=2&limit=10 returns correct slice + totalPages math', async () => {
+    const res = await fetch(`${BASE_URL}/users?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(limit);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBe(Math.ceil(seedCount / limit));
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ lastName: string }>) {
+      expect(item.lastName).toContain(tag);
+    }
+  });
+
+  it('?search=<tag> returns matches that exist beyond page 1', async () => {
+    const res = await fetch(`${BASE_URL}/users?search=${tag}&page=1&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.meta.pagination.totalPages).toBeGreaterThan(1);
+    expect(body.data.length).toBe(limit);
+    expect(body.meta.pagination.total - limit).toBeGreaterThan(0);
+  });
+
+  it('combined ?page=2&search=<tag> returns correct slice of search hits', async () => {
+    const res = await fetch(`${BASE_URL}/users?search=${tag}&page=2&limit=${limit}`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.data.length).toBe(limit);
+    for (const item of body.data as Array<{ lastName: string }>) {
+      expect(item.lastName).toContain(tag);
+    }
+  });
+
+  it('tenant isolation: search returns exactly the seeded set, no leaks', async () => {
+    const res = await fetch(`${BASE_URL}/users?search=${tag}&limit=100`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.total).toBe(seedCount);
+    expect(body.data.length).toBe(seedCount);
+    const returnedIds = (body.data as Array<{ id: number }>).map((d) => d.id).sort((a, b) => a - b);
+    const expectedIds = [...seededIds].sort((a, b) => a - b);
+    expect(returnedIds).toEqual(expectedIds);
+  });
+});
