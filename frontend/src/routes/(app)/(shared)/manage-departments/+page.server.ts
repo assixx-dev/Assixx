@@ -12,7 +12,7 @@ import { assertAdminLevelAccess } from '$lib/server/manage-page-access';
 import { buildLoginUrl } from '$lib/utils/build-apex-url';
 
 import type { PageServerLoad } from './$types';
-import type { Department, Area, AdminUser, Hall } from './_lib/types';
+import type { Department, Area, Hall } from './_lib/types';
 
 export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
   const { user, orgScope } = await parent();
@@ -38,30 +38,26 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
       departments: [] as Department[],
       areas: [] as Area[],
       halls: [] as Hall[],
-      departmentLeads: [] as AdminUser[],
     };
   }
 
-  // Parallel fetch remaining data (permission confirmed)
-  const [areasData, hallsData, adminsData, rootsData] = await Promise.all([
+  // Parallel fetch remaining data (permission confirmed). Lead candidates
+  // are no longer pre-fetched server-side — the modal's <PickerTypeahead>
+  // queries `/users` debounced on demand (FEAT_SERVER_DRIVEN_PAGINATION
+  // §4.12 / §D23 / Audit B2). Eliminates the silent 10-candidate cap.
+  const [areasData, hallsData] = await Promise.all([
     apiFetch<Area[]>('/areas', token, fetch),
     apiFetch<Hall[]>('/halls', token, fetch),
-    apiFetch<AdminUser[]>('/users?role=admin&isActive=1&position=department_lead', token, fetch),
-    apiFetch<AdminUser[]>('/users?role=root&isActive=1&position=department_lead', token, fetch),
   ]);
 
   const departments = Array.isArray(departmentsResult.data) ? departmentsResult.data : [];
   const areas = Array.isArray(areasData) ? areasData : [];
   const halls = Array.isArray(hallsData) ? hallsData : [];
-  const admins = Array.isArray(adminsData) ? adminsData : [];
-  const roots = Array.isArray(rootsData) ? rootsData : [];
-  const departmentLeads = [...admins, ...roots];
 
   return {
     permissionDenied: false as const,
     departments,
     areas,
     halls,
-    departmentLeads,
   };
 };

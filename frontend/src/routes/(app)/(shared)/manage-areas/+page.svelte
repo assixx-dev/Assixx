@@ -9,6 +9,10 @@
 
   import HighlightText from '$lib/components/HighlightText.svelte';
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
+  import {
+    pickerOptionFromIdAndName,
+    type PickerOption,
+  } from '$lib/components/picker-typeahead-helpers';
   import { showErrorAlert, showSuccessAlert } from '$lib/stores/toast';
 
   // =============================================================================
@@ -45,9 +49,10 @@
 
   const { data }: { data: PageData } = $props();
 
-  // SSR data via $derived - updates when invalidateAll() is called
+  // SSR data via $derived - updates when invalidateAll() is called.
+  // Lead candidates are no longer SSR-prefetched — the modal owns the
+  // typeahead and queries `/users` debounced on demand (§D23).
   const areas = $derived(data.areas);
-  const areaLeads = $derived(data.areaLeads);
   const allDepartments = $derived(data.departments);
   const allHalls = $derived(data.halls);
 
@@ -76,11 +81,14 @@
   let deletingAreaId: number | null = $state(null);
   let forceDeleteMessage = $state('');
 
-  // Form fields
+  // Form fields. Lead + deputy are full PickerOption objects post-§D23
+  // (consumer extracts `.id` on submit). The synth in `openEditModal`
+  // builds them from the entity row's `areaLeadName`/`areaDeputyLeadName`
+  // — no /users/:id round-trip needed for chip rendering.
   let formName = $state('');
   let formDescription = $state('');
-  let formAreaLeadId: number | null = $state(null);
-  let formAreaDeputyLeadId = $state<number | null>(null);
+  let formAreaLead = $state<PickerOption | null>(null);
+  let formAreaDeputyLead = $state<PickerOption | null>(null);
   let formType: AreaType = $state('other');
   let formCapacity: number | null = $state(null);
   let formAddress = $state('');
@@ -122,8 +130,11 @@
     const formData = populateFormFromArea(area, allDepartments, allHalls);
     formName = formData.name;
     formDescription = formData.description;
-    formAreaLeadId = formData.areaLeadId;
-    formAreaDeputyLeadId = area.areaDeputyLeadId ?? null;
+    // Synth PickerOption from the entity row's `(id, name)` pair —
+    // pickerOptionFromIdAndName returns null when either is missing,
+    // matching "no current selection" semantics.
+    formAreaLead = pickerOptionFromIdAndName(area.areaLeadId, area.areaLeadName);
+    formAreaDeputyLead = pickerOptionFromIdAndName(area.areaDeputyLeadId, area.areaDeputyLeadName);
     formType = formData.type;
     formCapacity = formData.capacity;
     formAddress = formData.address;
@@ -143,8 +154,8 @@
     const defaults = getDefaultFormValues();
     formName = defaults.name;
     formDescription = defaults.description;
-    formAreaLeadId = defaults.areaLeadId;
-    formAreaDeputyLeadId = null;
+    formAreaLead = null;
+    formAreaDeputyLead = null;
     formType = defaults.type;
     formCapacity = defaults.capacity;
     formAddress = defaults.address;
@@ -174,6 +185,25 @@
   // FORM HANDLERS
   // =============================================================================
 
+  /**
+   * Build the SaveArea payload from current form state. Extracted to keep
+   * `handleFormSubmit` under the eslint complexity cap (10).
+   */
+  function buildAreaSubmitPayload(): Parameters<typeof buildAreaPayload>[0] {
+    return {
+      name: formName,
+      description: formDescription,
+      areaLeadId: formAreaLead?.id ?? null,
+      areaDeputyLeadId: formAreaDeputyLead?.id ?? null,
+      type: formType,
+      capacity: formCapacity,
+      address: formAddress,
+      departmentIds: formDepartmentIds,
+      hallIds: formHallIds,
+      isActive: formIsActive,
+    };
+  }
+
   async function handleFormSubmit(e: Event) {
     e.preventDefault();
     if (submitting) return;
@@ -181,33 +211,16 @@
     submitting = true;
 
     try {
-      const payload = buildAreaPayload({
-        name: formName,
-        description: formDescription,
-        areaLeadId: formAreaLeadId,
-        areaDeputyLeadId: formAreaDeputyLeadId,
-        type: formType,
-        capacity: formCapacity,
-        address: formAddress,
-        departmentIds: formDepartmentIds,
-        hallIds: formHallIds,
-        isActive: formIsActive,
-      });
-
+      const payload = buildAreaPayload(buildAreaSubmitPayload());
       const result = await saveArea(payload, editingAreaId);
 
-      if (result.success && result.areaId !== null) {
-        // Assign departments + halls via dedicated endpoints
-        await Promise.all([
-          assignDepartmentsToArea(result.areaId, formDepartmentIds),
-          assignHallsToArea(result.areaId, formHallIds),
-        ]);
-
-        showSuccessAlert(isEditMode ? messages.SUCCESS_UPDATED : messages.SUCCESS_CREATED);
-        closeAreaModal();
-        await invalidateAll();
-      } else if (result.success) {
-        // Fallback: area saved but no ID returned (shouldn't happen)
+      if (result.success) {
+        if (result.areaId !== null) {
+          await Promise.all([
+            assignDepartmentsToArea(result.areaId, formDepartmentIds),
+            assignHallsToArea(result.areaId, formHallIds),
+          ]);
+        }
         showSuccessAlert(isEditMode ? messages.SUCCESS_UPDATED : messages.SUCCESS_CREATED);
         closeAreaModal();
         await invalidateAll();
@@ -597,14 +610,13 @@
     {messages}
     bind:formName
     bind:formDescription
-    bind:formAreaLeadId
-    bind:formAreaDeputyLeadId
+    bind:formAreaLead
+    bind:formAreaDeputyLead
     bind:formType
     bind:formCapacity
     bind:formDepartmentIds
     bind:formHallIds
     bind:formIsActive
-    {areaLeads}
     {allDepartments}
     {allHalls}
     {submitting}

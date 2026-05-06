@@ -89,13 +89,17 @@ export async function loadAssets(): Promise<Asset[]> {
 }
 
 /**
- * Fetch team members from /teams/:id/members endpoint
- * Returns array of member objects with id
+ * Fetch team members from `/teams/:id/members`. Backend returns the full
+ * `TeamMember[]` (controller signature `Promise<TeamMember[]>`) so we
+ * widen the return type — needed by Phase 4.12b to build `PickerOption`
+ * chips (firstName/lastName/email) when entering edit mode for the
+ * member multi-picker. Pre-4.12b code only consumed `.id`, hence the
+ * narrower historical return type.
  */
-export async function fetchTeamMembers(teamId: number): Promise<{ id: number }[]> {
+export async function fetchTeamMembers(teamId: number): Promise<TeamMember[]> {
   try {
     const result: unknown = await apiClient.get(API_ENDPOINTS.teamMembers(teamId));
-    return extractArray<{ id: number }>(result);
+    return extractArray<TeamMember>(result);
   } catch (err: unknown) {
     log.error({ err }, 'Error fetching team members');
     return [];

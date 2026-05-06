@@ -9,6 +9,10 @@
 
   import HighlightText from '$lib/components/HighlightText.svelte';
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
+  import {
+    pickerOptionFromIdAndName,
+    type PickerOption,
+  } from '$lib/components/picker-typeahead-helpers';
   import { showWarningAlert, showErrorAlert, showSuccessAlert } from '$lib/stores/toast';
 
   import {
@@ -44,11 +48,12 @@
 
   const { data }: { data: PageData } = $props();
 
-  // SSR data via $derived - updates when invalidateAll() is called
+  // SSR data via $derived - updates when invalidateAll() is called.
+  // Lead candidates are no longer SSR-prefetched — the modal owns the
+  // typeahead and queries `/users` debounced on demand (§D23).
   const allDepartments = $derived(data.departments);
   const allAreas = $derived(data.areas);
   const allHalls = $derived(data.halls);
-  const allDepartmentLeads = $derived(data.departmentLeads);
 
   // Hierarchy labels from layout data inheritance (A6)
   const labels = $derived(data.hierarchyLabels);
@@ -81,12 +86,15 @@
   // Force Delete State
   let forceDeleteMessage = $state('');
 
-  // Form Fields
+  // Form Fields. Lead + deputy are full PickerOption objects post-§D23
+  // (consumer extracts `.id` on submit). The synth in `openEditModal`
+  // builds them from the entity row's `departmentLeadName`/
+  // `departmentDeputyLeadName` — no /users/:id round-trip needed.
   let formName = $state('');
   let formDescription = $state('');
   let formAreaId: number | null = $state(null);
-  let formDepartmentLeadId: number | null = $state(null);
-  let formDepartmentDeputyLeadId: number | null = $state(null);
+  let formDepartmentLead = $state<PickerOption | null>(null);
+  let formDepartmentDeputyLead = $state<PickerOption | null>(null);
   let formHallId: number | null = $state(null);
   let formIsActive: FormIsActiveStatus = $state(1);
 
@@ -109,6 +117,21 @@
   // API FUNCTIONS - Level 3: invalidateAll() after mutations
   // =============================================================================
 
+  /**
+   * Build the SaveDepartment payload from current form state. Extracted to keep
+   * `saveDepartment` under the eslint complexity cap (10).
+   */
+  function buildDepartmentSubmitPayload(): Parameters<typeof buildDepartmentPayload>[0] {
+    return {
+      name: formName,
+      description: formDescription,
+      areaId: formAreaId,
+      departmentLeadId: formDepartmentLead?.id ?? null,
+      departmentDeputyLeadId: formDepartmentDeputyLead?.id ?? null,
+      isActive: formIsActive,
+    };
+  }
+
   async function saveDepartment(): Promise<void> {
     submitting = true;
     if (!formName.trim()) {
@@ -116,21 +139,12 @@
       submitting = false;
       return;
     }
-    const payload = buildDepartmentPayload({
-      name: formName,
-      description: formDescription,
-      areaId: formAreaId,
-      departmentLeadId: formDepartmentLeadId,
-      departmentDeputyLeadId: formDepartmentDeputyLeadId,
-      isActive: formIsActive,
-    });
+    const payload = buildDepartmentPayload(buildDepartmentSubmitPayload());
     const result = await apiSaveDepartment(payload, currentEditId);
-    if (result.success && result.departmentId !== null) {
-      await apiSetDepartmentHall(result.departmentId, formHallId);
-      closeDepartmentModal();
-      await invalidateAll();
-      showSuccessAlert(isEditMode ? 'Erfolgreich aktualisiert' : 'Erfolgreich erstellt');
-    } else if (result.success) {
+    if (result.success) {
+      if (result.departmentId !== null) {
+        await apiSetDepartmentHall(result.departmentId, formHallId);
+      }
       closeDepartmentModal();
       await invalidateAll();
       showSuccessAlert(isEditMode ? 'Erfolgreich aktualisiert' : 'Erfolgreich erstellt');
@@ -203,8 +217,16 @@
     formName = formData.name;
     formDescription = formData.description;
     formAreaId = formData.areaId;
-    formDepartmentLeadId = formData.departmentLeadId;
-    formDepartmentDeputyLeadId = formData.departmentDeputyLeadId;
+    // Synth PickerOption from the entity row's `(id, name)` pair —
+    // pickerOptionFromIdAndName returns null when either is missing.
+    formDepartmentLead = pickerOptionFromIdAndName(
+      department.departmentLeadId,
+      department.departmentLeadName,
+    );
+    formDepartmentDeputyLead = pickerOptionFromIdAndName(
+      department.departmentDeputyLeadId,
+      department.departmentDeputyLeadName,
+    );
     formHallId = formData.hallId;
     formIsActive = formData.isActive;
     showDepartmentModal = true;
@@ -237,8 +259,8 @@
     formName = defaults.name;
     formDescription = defaults.description;
     formAreaId = defaults.areaId;
-    formDepartmentLeadId = defaults.departmentLeadId;
-    formDepartmentDeputyLeadId = defaults.departmentDeputyLeadId;
+    formDepartmentLead = null;
+    formDepartmentDeputyLead = null;
     formHallId = defaults.hallId;
     formIsActive = defaults.isActive;
   }
@@ -610,13 +632,12 @@
     bind:formName
     bind:formDescription
     bind:formAreaId
-    bind:formDepartmentLeadId
-    bind:formDepartmentDeputyLeadId
+    bind:formDepartmentLead
+    bind:formDepartmentDeputyLead
     bind:formHallId
     bind:formIsActive
     {allAreas}
     {allHalls}
-    {allDepartmentLeads}
     {submitting}
     onclose={closeDepartmentModal}
     onsubmit={handleFormSubmit}

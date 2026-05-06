@@ -12,7 +12,7 @@ import { assertTeamLevelAccess } from '$lib/server/manage-page-access';
 import { buildLoginUrl } from '$lib/utils/build-apex-url';
 
 import type { PageServerLoad } from './$types';
-import type { Team, Department, Admin, TeamMember, Asset } from './_lib/types';
+import type { Team, Department, Asset } from './_lib/types';
 
 function toArray<T>(data: T | null): T extends readonly (infer U)[] ? U[] : T[] {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any -- generic array normalization
@@ -35,8 +35,6 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
       permissionDenied: true as const,
       teams: [] as Team[],
       departments: [] as Department[],
-      leaders: [] as Admin[],
-      employees: [] as TeamMember[],
       assets: [] as Asset[],
     };
   }
@@ -44,10 +42,14 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
   // Parallel fetch remaining data (permission confirmed). Halls are no longer
   // fetched here — teams display the inherited hall via department.hallName
   // (1:1 model after migration 20260505221345432_simplify-department-hall-1to1).
-  const [departmentsData, leaderCandidatesData, employeesData, assetsData] = await Promise.all([
+  // Lead + employee picker candidates are no longer SSR-prefetched — the
+  // modal's <PickerTypeahead> queries `/users` debounced on demand
+  // (FEAT_SERVER_DRIVEN_PAGINATION §4.12 / §D23 / Audit B2 + B3). The
+  // pre-Phase-4.12 employee fetch shipped no `isActive=1` either, so the
+  // dropdown could include inactive users — also fixed by the picker
+  // search-params contract (`isActive: '1'`).
+  const [departmentsData, assetsData] = await Promise.all([
     apiFetch<Department[]>('/departments', token, fetch),
-    apiFetch<Admin[]>('/users?isActive=1&position=team_lead', token, fetch),
-    apiFetch<TeamMember[]>('/users?role=employee', token, fetch),
     apiFetch<Asset[]>('/assets', token, fetch),
   ]);
 
@@ -55,8 +57,6 @@ export const load: PageServerLoad = async ({ cookies, fetch, parent, url }) => {
     permissionDenied: false as const,
     teams: toArray(teamsResult.data),
     departments: toArray(departmentsData),
-    leaders: toArray(leaderCandidatesData),
-    employees: toArray(employeesData),
     assets: toArray(assetsData),
   };
 };

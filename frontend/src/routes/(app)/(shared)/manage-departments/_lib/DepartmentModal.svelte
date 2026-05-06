@@ -1,15 +1,17 @@
 <script lang="ts">
-  import {
-    getStatusBadgeClass,
-    getStatusLabel,
-    getSelectedAreaName,
-    getSelectedLeadName,
-  } from './utils';
+  import PickerTypeahead from '$lib/components/PickerTypeahead.svelte';
 
+  import { getStatusBadgeClass, getStatusLabel, getSelectedAreaName } from './utils';
+
+  import type { PickerOption } from '$lib/components/picker-typeahead-helpers';
   import type { DepartmentMessages } from './constants';
-  import type { FormIsActiveStatus, Area, AdminUser, Hall } from './types';
+  import type { FormIsActiveStatus, Area, Hall } from './types';
 
-  // Props with bindable for two-way binding
+  /**
+   * Lead-candidate pickers (department lead + deputy) consume
+   * PickerTypeahead with `position=department_lead` (FEAT_SERVER_DRIVEN_PAGINATION
+   * §4.12 §D23). Both bindings are full PickerOption objects, NOT scalar IDs.
+   */
   interface Props {
     show: boolean;
     isEditMode: boolean;
@@ -18,14 +20,13 @@
     formName: string;
     formDescription: string;
     formAreaId: number | null;
-    formDepartmentLeadId: number | null;
-    formDepartmentDeputyLeadId: number | null;
+    formDepartmentLead: PickerOption | null;
+    formDepartmentDeputyLead: PickerOption | null;
     /** Single hall ID (1:1 model after migration 20260505221345432). */
     formHallId: number | null;
     formIsActive: FormIsActiveStatus;
     allAreas: Area[];
     allHalls: Hall[];
-    allDepartmentLeads: AdminUser[];
     submitting: boolean;
     onclose: () => void;
     onsubmit: (e: Event) => void;
@@ -33,8 +34,13 @@
 
   /* eslint-disable prefer-const, @typescript-eslint/no-useless-default-assignment -- Svelte $bindable() requires let and is not a useless default */
   // prettier-ignore
-  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaId = $bindable(), formDepartmentLeadId = $bindable(), formDepartmentDeputyLeadId = $bindable(), formHallId = $bindable(), formIsActive = $bindable(), allAreas, allHalls, allDepartmentLeads, submitting, onclose, onsubmit }: Props = $props();
+  let { show, isEditMode, modalTitle, messages, formName = $bindable(), formDescription = $bindable(), formAreaId = $bindable(), formDepartmentLead = $bindable(), formDepartmentDeputyLead = $bindable(), formHallId = $bindable(), formIsActive = $bindable(), allAreas, allHalls, submitting, onclose, onsubmit }: Props = $props();
   /* eslint-enable prefer-const, @typescript-eslint/no-useless-default-assignment */
+
+  // Picker filters: shared dataset for lead + deputy. No `role=` filter so
+  // backend returns admin + root candidates with `position=department_lead`
+  // mixed (matches the pre-Phase-4.12 admins+roots SSR merge).
+  const departmentLeadPickerParams = { isActive: '1', position: 'department_lead' } as const;
 
   /**
    * After migration 20260505221345432_simplify-department-hall-1to1, halls are
@@ -58,19 +64,13 @@
     }
   });
 
-  // Local dropdown states
+  // Local dropdown states (lead/deputy dropdowns now owned by PickerTypeahead).
   let areaDropdownOpen = $state(false);
-  let leadDropdownOpen = $state(false);
-  let deputyLeadDropdownOpen = $state(false);
   let hallDropdownOpen = $state(false);
   let statusDropdownOpen = $state(false);
 
   // Derived dropdown display names
   const selectedAreaName = $derived(getSelectedAreaName(formAreaId, allAreas));
-  const selectedLeadName = $derived(getSelectedLeadName(formDepartmentLeadId, allDepartmentLeads));
-  const selectedDeputyLeadName = $derived(
-    getSelectedLeadName(formDepartmentDeputyLeadId, allDepartmentLeads),
-  );
   // Hall is 1:1 and area-scoped; show the matching hall name or NO_HALL fallback.
   const selectedHallName = $derived(
     formHallId === null ?
@@ -84,8 +84,6 @@
 
   function toggleAreaDropdown(e: MouseEvent): void {
     e.stopPropagation();
-    leadDropdownOpen = false;
-    deputyLeadDropdownOpen = false;
     hallDropdownOpen = false;
     statusDropdownOpen = false;
     areaDropdownOpen = !areaDropdownOpen;
@@ -96,39 +94,9 @@
     areaDropdownOpen = false;
   }
 
-  function toggleLeadDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    areaDropdownOpen = false;
-    deputyLeadDropdownOpen = false;
-    hallDropdownOpen = false;
-    statusDropdownOpen = false;
-    leadDropdownOpen = !leadDropdownOpen;
-  }
-
-  function selectLead(leadId: number | null): void {
-    formDepartmentLeadId = leadId;
-    leadDropdownOpen = false;
-  }
-
-  function toggleDeputyLeadDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    areaDropdownOpen = false;
-    leadDropdownOpen = false;
-    hallDropdownOpen = false;
-    statusDropdownOpen = false;
-    deputyLeadDropdownOpen = !deputyLeadDropdownOpen;
-  }
-
-  function selectDeputyLead(leadId: number | null): void {
-    formDepartmentDeputyLeadId = leadId;
-    deputyLeadDropdownOpen = false;
-  }
-
   function toggleHallDropdown(e: MouseEvent): void {
     e.stopPropagation();
     areaDropdownOpen = false;
-    leadDropdownOpen = false;
-    deputyLeadDropdownOpen = false;
     statusDropdownOpen = false;
     hallDropdownOpen = !hallDropdownOpen;
   }
@@ -141,8 +109,6 @@
   function toggleStatusDropdown(e: MouseEvent): void {
     e.stopPropagation();
     areaDropdownOpen = false;
-    leadDropdownOpen = false;
-    deputyLeadDropdownOpen = false;
     hallDropdownOpen = false;
     statusDropdownOpen = !statusDropdownOpen;
   }
@@ -181,8 +147,6 @@
   $effect(() => {
     if (show) {
       areaDropdownOpen = false;
-      leadDropdownOpen = false;
-      deputyLeadDropdownOpen = false;
       hallDropdownOpen = false;
       statusDropdownOpen = false;
     }
@@ -190,24 +154,13 @@
 
   // Close dropdowns on outside click
   $effect(() => {
-    const anyDropdownOpen =
-      areaDropdownOpen ||
-      leadDropdownOpen ||
-      deputyLeadDropdownOpen ||
-      hallDropdownOpen ||
-      statusDropdownOpen;
+    const anyDropdownOpen = areaDropdownOpen || hallDropdownOpen || statusDropdownOpen;
     if (!anyDropdownOpen) return;
 
     const handleClick = (e: MouseEvent): void => {
       const target = e.target as HTMLElement;
       closeIfOutside(areaDropdownOpen, target, 'area-dropdown', () => {
         areaDropdownOpen = false;
-      });
-      closeIfOutside(leadDropdownOpen, target, 'lead-dropdown', () => {
-        leadDropdownOpen = false;
-      });
-      closeIfOutside(deputyLeadDropdownOpen, target, 'deputy-lead-dropdown', () => {
-        deputyLeadDropdownOpen = false;
       });
       closeIfOutside(hallDropdownOpen, target, 'hall-dropdown', () => {
         hallDropdownOpen = false;
@@ -337,14 +290,19 @@
           </div>
         </div>
 
+        <!-- Department Lead Picker (typeahead).
+             Label rendered as <span> + linked via PickerTypeahead's
+             `labelledBy` prop (aria-labelledby on the inner input) —
+             a <label for=> would orphan because the picker owns its
+             input id. -->
         <div class="form-field">
-          <label
+          <span
             class="form-field__label"
-            for="lead-hidden"
+            id="department-lead-label"
           >
             <i class="fas fa-user-tie mr-1"></i>
             {messages.LABEL_DEPARTMENT_LEAD}
-          </label>
+          </span>
           <div
             class="alert alert--info alert--sm"
             style="margin-bottom: var(--spacing-3);"
@@ -360,110 +318,29 @@
               </p>
             </div>
           </div>
-          <input
-            type="hidden"
-            id="lead-hidden"
-            value={formDepartmentLeadId ?? ''}
+          <PickerTypeahead
+            bind:value={formDepartmentLead}
+            searchParams={departmentLeadPickerParams}
+            labelledBy="department-lead-label"
+            placeholderText={messages.NO_DEPARTMENT_LEAD}
           />
-          {#if allDepartmentLeads.length > 0}
-            <div
-              class="dropdown"
-              id="lead-dropdown"
-            >
-              <button
-                type="button"
-                class="dropdown__trigger"
-                class:active={leadDropdownOpen}
-                onclick={toggleLeadDropdown}
-              >
-                <span>{selectedLeadName}</span>
-                <i class="fas fa-chevron-down"></i>
-              </button>
-              <div
-                class="dropdown__menu"
-                class:active={leadDropdownOpen}
-              >
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectLead(null);
-                  }}
-                >
-                  {messages.NO_DEPARTMENT_LEAD}
-                </button>
-                {#each allDepartmentLeads as lead (lead.id)}
-                  <button
-                    type="button"
-                    class="dropdown__option"
-                    onclick={() => {
-                      selectLead(lead.id);
-                    }}
-                  >
-                    {lead.firstName}
-                    {lead.lastName} ({lead.role === 'root' ? 'Root' : 'Admin'})
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
         </div>
 
+        <!-- Department Deputy Lead Picker (typeahead). Span-as-label, see above. -->
         <div class="form-field">
-          <label
+          <span
             class="form-field__label"
-            for="deputy-lead-hidden"
+            id="department-deputy-lead-label"
           >
             <i class="fas fa-user-shield mr-1"></i>
             Stellvertreter
-          </label>
-          <input
-            type="hidden"
-            id="deputy-lead-hidden"
-            value={formDepartmentDeputyLeadId ?? ''}
+          </span>
+          <PickerTypeahead
+            bind:value={formDepartmentDeputyLead}
+            searchParams={departmentLeadPickerParams}
+            labelledBy="department-deputy-lead-label"
+            placeholderText="— Kein Stellvertreter —"
           />
-          {#if allDepartmentLeads.length > 0}
-            <div
-              class="dropdown"
-              id="deputy-lead-dropdown"
-            >
-              <button
-                type="button"
-                class="dropdown__trigger"
-                class:active={deputyLeadDropdownOpen}
-                onclick={toggleDeputyLeadDropdown}
-              >
-                <span>{selectedDeputyLeadName}</span>
-                <i class="fas fa-chevron-down"></i>
-              </button>
-              <div
-                class="dropdown__menu"
-                class:active={deputyLeadDropdownOpen}
-              >
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectDeputyLead(null);
-                  }}
-                >
-                  {messages.NO_DEPARTMENT_LEAD}
-                </button>
-                {#each allDepartmentLeads as lead (lead.id)}
-                  <button
-                    type="button"
-                    class="dropdown__option"
-                    onclick={() => {
-                      selectDeputyLead(lead.id);
-                    }}
-                  >
-                    {lead.firstName}
-                    {lead.lastName} ({lead.role === 'root' ? 'Root' : 'Admin'})
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
         </div>
 
         <!--

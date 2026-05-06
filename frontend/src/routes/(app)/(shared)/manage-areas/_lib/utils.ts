@@ -6,15 +6,7 @@ import { IS_ACTIVE } from '@assixx/shared/constants';
 
 import { STATUS_BADGE_CLASSES, STATUS_LABELS, TYPE_LABELS, FORM_DEFAULTS } from './constants';
 
-import type {
-  Area,
-  AdminUser,
-  Department,
-  Hall,
-  IsActiveStatus,
-  AreaType,
-  FormIsActiveStatus,
-} from './types';
+import type { Area, Department, Hall, IsActiveStatus, AreaType, FormIsActiveStatus } from './types';
 
 // =============================================================================
 // STATUS HELPERS
@@ -40,19 +32,6 @@ export function getTypeLabel(type: string): string {
     return TYPE_LABELS[type as AreaType];
   }
   return type;
-}
-
-// =============================================================================
-// AREA LEAD HELPERS
-// =============================================================================
-
-/** Get area lead display name for dropdown */
-export function getAreaLeadDisplayName(areaLeadId: number | null, areaLeads: AdminUser[]): string {
-  if (areaLeadId === null) return 'Kein Leiter';
-  const lead = areaLeads.find((u) => u.id === areaLeadId);
-  if (!lead) return 'Kein Leiter';
-  const roleLabel = lead.role === 'root' ? '(Root)' : '(Admin)';
-  return `${lead.firstName} ${lead.lastName} ${roleLabel}`;
 }
 
 // =============================================================================

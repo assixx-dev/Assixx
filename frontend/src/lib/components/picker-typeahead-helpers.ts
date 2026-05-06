@@ -205,6 +205,50 @@ export function filterSuggestions(
 }
 
 /**
+ * Build a PickerOption from `(id, name)` pairs found on entity rows
+ * (`area.areaLeadName`, `dept.departmentDeputyLeadName`, `team.leaderName`,
+ * etc.). Used by EDIT-mode pre-population so the picker shows the stored
+ * selection without a second `/users/:id` round-trip.
+ *
+ * Returns `null` when `id` is `null/undefined` OR when `label` is missing —
+ * the chip cannot render without a label, so a `null` form-state value is
+ * the honest representation of "no current selection". Consumers do
+ * `formXxx = pickerOptionFromIdAndName(entity.xxxId, entity.xxxName)`.
+ *
+ * The `raw` record is a stub: `uuid` defaults to `''`, name fields default
+ * to `null`, email to `''`. The picker's own search path always re-fetches
+ * fresh records, so the stub only has to survive ONE render of the chip
+ * (which uses `option.label` directly, not `raw`).
+ *
+ * @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §4.12 §D23
+ */
+/**
+ * Internal: build the stub `PickerUserRecord` for `pickerOptionFromIdAndName`.
+ * Extracted to keep the public helper under the eslint complexity cap (10).
+ */
+function buildPickerRaw(id: number, overrides: Partial<PickerUserRecord>): PickerUserRecord {
+  return {
+    id,
+    uuid: overrides.uuid ?? '',
+    firstName: overrides.firstName ?? null,
+    lastName: overrides.lastName ?? null,
+    email: overrides.email ?? '',
+    ...(overrides.position !== undefined ? { position: overrides.position } : {}),
+    ...(overrides.role !== undefined ? { role: overrides.role } : {}),
+  };
+}
+
+export function pickerOptionFromIdAndName(
+  id: number | null | undefined,
+  label: string | null | undefined,
+  rawOverrides: Partial<PickerUserRecord> = {},
+): PickerOption | null {
+  if (id === null || id === undefined) return null;
+  if (label === null || label === undefined || label === '') return null;
+  return { id, label, raw: buildPickerRaw(id, rawOverrides) };
+}
+
+/**
  * Debounce factory for the typeahead's keystroke → fetch path.
  *
  * Returns `{ call, cancel }`:

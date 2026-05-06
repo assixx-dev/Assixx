@@ -1,26 +1,33 @@
 <script lang="ts">
   import { onClickOutsideDropdown } from '$lib/actions/click-outside';
+  import PickerTypeahead from '$lib/components/PickerTypeahead.svelte';
   import { DEFAULT_HIERARCHY_LABELS, type HierarchyLabels } from '$lib/types/hierarchy-labels';
 
   import { createMessages } from './constants';
   import {
     getStatusBadgeClass,
     getStatusLabel,
-    getMembersDisplayText,
     getAssetsDisplayText,
     getDepartmentDisplayText,
-    getLeaderDisplayText,
     toggleIdInArray,
   } from './utils';
 
-  import type { Department, Admin, TeamMember, Asset, FormIsActiveStatus } from './types';
+  import type { PickerOption } from '$lib/components/picker-typeahead-helpers';
+  import type { Department, Asset, FormIsActiveStatus } from './types';
 
   /**
-   * Team form modal — Hall is now READ-ONLY and inherited from the parent
-   * Department (1:1 model, see migration
-   * 20260505221345432_simplify-department-hall-1to1). The dropdown was
-   * removed; the hall is shown as an info badge derived from the selected
-   * Department's `hallId`/`hallName`.
+   * Team form modal.
+   *
+   * Hall is READ-ONLY and inherited from the parent Department (1:1 model,
+   * migration 20260505221345432_simplify-department-hall-1to1).
+   *
+   * Lead + deputy + member candidates are sourced through PickerTypeahead
+   * (FEAT_SERVER_DRIVEN_PAGINATION §4.12 §D23):
+   *  - leader (single)  — `?isActive=1&position=team_lead`
+   *  - deputy (single)  — same params
+   *  - members (multi)  — `?isActive=1&role=employee`
+   * Form-state surface is full PickerOption objects, NOT scalar IDs —
+   * `handleFormSubmit` extracts `.id` for the backend payload.
    */
   interface Props {
     isEditMode: boolean;
@@ -29,14 +36,12 @@
     formName: string;
     formDescription: string;
     formDepartmentId: number | null;
-    formLeaderId: number | null;
-    formDeputyLeaderId: number | null;
-    formMemberIds: number[];
+    formLeader: PickerOption | null;
+    formDeputyLeader: PickerOption | null;
+    formMembers: PickerOption[];
     formAssetIds: number[];
     formIsActive: FormIsActiveStatus;
     allDepartments: Department[];
-    allLeaders: Admin[];
-    allEmployees: TeamMember[];
     allAssets: Asset[];
     submitting: boolean;
     onclose: () => void;
@@ -60,14 +65,12 @@
     formName,
     formDescription,
     formDepartmentId,
-    formLeaderId,
-    formDeputyLeaderId,
-    formMemberIds,
+    formLeader,
+    formDeputyLeader,
+    formMembers,
     formAssetIds,
     formIsActive,
     allDepartments,
-    allLeaders,
-    allEmployees,
     allAssets,
     submitting,
     onclose,
@@ -80,9 +83,9 @@
   let localName = $state('');
   let localDescription = $state('');
   let localDepartmentId = $state<number | null>(null);
-  let localLeaderId = $state<number | null>(null);
-  let localDeputyLeaderId = $state<number | null>(null);
-  let localMemberIds = $state<number[]>([]);
+  let localLeader = $state<PickerOption | null>(null);
+  let localDeputyLeader = $state<PickerOption | null>(null);
+  let localMembers = $state<PickerOption[]>([]);
   let localAssetIds = $state<number[]>([]);
   let localIsActive = $state<FormIsActiveStatus>(1);
 
@@ -91,25 +94,24 @@
     localName = formName;
     localDescription = formDescription;
     localDepartmentId = formDepartmentId;
-    localLeaderId = formLeaderId;
-    localDeputyLeaderId = formDeputyLeaderId;
-    localMemberIds = [...formMemberIds];
+    localLeader = formLeader;
+    localDeputyLeader = formDeputyLeader;
+    localMembers = [...formMembers];
     localAssetIds = [...formAssetIds];
     localIsActive = formIsActive;
   });
 
-  // Dropdown states (no hallDropdownOpen — hall is read-only now)
+  // Dropdown states (no hallDropdownOpen — hall is read-only now;
+  // leader/deputy/members dropdowns are owned by PickerTypeahead).
   let departmentDropdownOpen = $state(false);
-  let leaderDropdownOpen = $state(false);
-  let deputyLeaderDropdownOpen = $state(false);
-  let membersDropdownOpen = $state(false);
   let assetsDropdownOpen = $state(false);
   let statusDropdownOpen = $state(false);
 
-  // Filter: exclude current leader from members dropdown (leader is auto-member)
-  const availableEmployees = $derived(
-    allEmployees.filter((e: TeamMember) => e.id !== localLeaderId),
-  );
+  // Picker filters. Lead + deputy share the team_lead dataset; members
+  // pull from active employees (B3 fix: pre-Phase-4.12 SSR fetch shipped
+  // no `isActive=1`, so inactive employees could appear).
+  const teamLeadPickerParams = { isActive: '1', position: 'team_lead' } as const;
+  const employeePickerParams = { isActive: '1', role: 'employee' } as const;
 
   /**
    * Hall info derived from the selected department.
@@ -127,9 +129,6 @@
 
   function closeOtherDropdowns(except: string): void {
     if (except !== 'department') departmentDropdownOpen = false;
-    if (except !== 'leader') leaderDropdownOpen = false;
-    if (except !== 'deputyLeader') deputyLeaderDropdownOpen = false;
-    if (except !== 'members') membersDropdownOpen = false;
     if (except !== 'assets') assetsDropdownOpen = false;
     if (except !== 'status') statusDropdownOpen = false;
   }
@@ -143,38 +142,6 @@
   function selectDepartment(id: number | null): void {
     localDepartmentId = id;
     departmentDropdownOpen = false;
-  }
-
-  function toggleLeaderDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    closeOtherDropdowns('leader');
-    leaderDropdownOpen = !leaderDropdownOpen;
-  }
-
-  function selectLeader(id: number | null): void {
-    localLeaderId = id;
-    leaderDropdownOpen = false;
-  }
-
-  function toggleDeputyLeaderDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    closeOtherDropdowns('deputyLeader');
-    deputyLeaderDropdownOpen = !deputyLeaderDropdownOpen;
-  }
-
-  function selectDeputyLeader(id: number | null): void {
-    localDeputyLeaderId = id;
-    deputyLeaderDropdownOpen = false;
-  }
-
-  function toggleMembersDropdown(e: MouseEvent): void {
-    e.stopPropagation();
-    closeOtherDropdowns('members');
-    membersDropdownOpen = !membersDropdownOpen;
-  }
-
-  function toggleMember(id: number): void {
-    localMemberIds = toggleIdInArray(localMemberIds, id);
   }
 
   function toggleAssetsDropdown(e: MouseEvent): void {
@@ -200,13 +167,22 @@
 
   function handleFormSubmit(e: Event): void {
     e.preventDefault();
+    // Extract scalar IDs from PickerOption form values (§D23 contract).
+    // Members come through as PickerOption[]; the leader is filtered out
+    // server-side, but we also strip it locally so the legacy
+    // "leader is auto-member" UX stays correct in the relations payload.
+    const leaderId = localLeader?.id ?? null;
+    const memberIds =
+      leaderId === null ?
+        localMembers.map((o) => o.id)
+      : localMembers.filter((o) => o.id !== leaderId).map((o) => o.id);
     onsubmit({
       name: localName,
       description: localDescription,
       departmentId: localDepartmentId,
-      leaderId: localLeaderId,
-      deputyLeaderId: localDeputyLeaderId,
-      memberIds: localMemberIds,
+      leaderId,
+      deputyLeaderId: localDeputyLeader?.id ?? null,
+      memberIds,
       assetIds: localAssetIds,
       isActive: localIsActive,
     });
@@ -216,9 +192,6 @@
   $effect(() => {
     return onClickOutsideDropdown(() => {
       departmentDropdownOpen = false;
-      leaderDropdownOpen = false;
-      deputyLeaderDropdownOpen = false;
-      membersDropdownOpen = false;
       assetsDropdownOpen = false;
       statusDropdownOpen = false;
     });
@@ -371,10 +344,15 @@
         </div>
       </div>
 
+      <!-- Team Leader Picker (typeahead).
+           Label rendered as <span> + linked via PickerTypeahead's
+           `labelledBy` prop (aria-labelledby on the inner input) —
+           a <label for=> would orphan because the picker owns its
+           input id. -->
       <div class="form-field">
-        <label
+        <span
           class="form-field__label"
-          for="team-lead">Leiter</label
+          id="team-lead-label">Leiter</span
         >
         <div
           class="alert alert--info alert--sm"
@@ -391,154 +369,48 @@
             </p>
           </div>
         </div>
-        {#if allLeaders.length > 0}
-          <div
-            class="dropdown"
-            id="team-lead-dropdown"
-          >
-            <button
-              type="button"
-              class="dropdown__trigger"
-              class:active={leaderDropdownOpen}
-              onclick={toggleLeaderDropdown}
-            >
-              <span>{getLeaderDisplayText(localLeaderId, allLeaders)}</span>
-              <i class="fas fa-chevron-down"></i>
-            </button>
-            <div
-              class="dropdown__menu"
-              class:active={leaderDropdownOpen}
-            >
-              <button
-                type="button"
-                class="dropdown__option"
-                onclick={() => {
-                  selectLeader(null);
-                }}
-              >
-                {messages.NO_LEADER}
-              </button>
-              {#each allLeaders as leader (leader.id)}
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectLeader(leader.id);
-                  }}
-                >
-                  {leader.firstName}
-                  {leader.lastName}
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
+        <PickerTypeahead
+          bind:value={localLeader}
+          searchParams={teamLeadPickerParams}
+          labelledBy="team-lead-label"
+          placeholderText={messages.NO_LEADER}
+        />
       </div>
 
+      <!-- Team Deputy Leader Picker (typeahead). Span-as-label, see above. -->
       <div class="form-field">
-        <label
+        <span
           class="form-field__label"
-          for="team-deputy-lead"
+          id="team-deputy-lead-label"
         >
           <i class="fas fa-user-shield mr-1"></i>
           Stellvertreter
-        </label>
-        {#if allLeaders.length > 0}
-          <div
-            class="dropdown"
-            id="team-deputy-lead-dropdown"
-          >
-            <button
-              type="button"
-              class="dropdown__trigger"
-              class:active={deputyLeaderDropdownOpen}
-              onclick={toggleDeputyLeaderDropdown}
-            >
-              <span>{getLeaderDisplayText(localDeputyLeaderId, allLeaders)}</span>
-              <i class="fas fa-chevron-down"></i>
-            </button>
-            <div
-              class="dropdown__menu"
-              class:active={deputyLeaderDropdownOpen}
-            >
-              <button
-                type="button"
-                class="dropdown__option"
-                onclick={() => {
-                  selectDeputyLeader(null);
-                }}
-              >
-                — Kein Stellvertreter —
-              </button>
-              {#each allLeaders as leader (leader.id)}
-                <button
-                  type="button"
-                  class="dropdown__option"
-                  onclick={() => {
-                    selectDeputyLeader(leader.id);
-                  }}
-                >
-                  {leader.firstName}
-                  {leader.lastName}
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
+        </span>
+        <PickerTypeahead
+          bind:value={localDeputyLeader}
+          searchParams={teamLeadPickerParams}
+          labelledBy="team-deputy-lead-label"
+          placeholderText="— Kein Stellvertreter —"
+        />
       </div>
 
+      <!-- Team Members Picker (typeahead, multi). Leader is auto-member,
+           submit-time filter removes the leader's id from the relations
+           payload to mirror the pre-Phase-4.12 "exclude leader from
+           members dropdown" behaviour. -->
       <div class="form-field">
-        <label
+        <span
           class="form-field__label"
-          for="team-members">Mitglieder</label
+          id="team-members-label">Mitglieder</span
         >
-        <div
-          class="dropdown"
-          id="team-members-dropdown"
-        >
-          <button
-            type="button"
-            class="dropdown__trigger"
-            class:active={membersDropdownOpen}
-            onclick={toggleMembersDropdown}
-          >
-            <span>{getMembersDisplayText(localMemberIds, availableEmployees)}</span>
-            <i class="fas fa-chevron-down"></i>
-          </button>
-          <div
-            class="dropdown__menu"
-            class:active={membersDropdownOpen}
-          >
-            {#each availableEmployees as employee (employee.id)}
-              <button
-                type="button"
-                class="dropdown__option dropdown__option--checkbox"
-                onclick={() => {
-                  toggleMember(employee.id);
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={localMemberIds.includes(employee.id)}
-                  class="mr-2"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                  }}
-                  onchange={() => {
-                    toggleMember(employee.id);
-                  }}
-                />
-                {employee.firstName}
-                {employee.lastName}
-              </button>
-            {/each}
-            {#if availableEmployees.length === 0}
-              <div class="dropdown__option dropdown__option--disabled">
-                {messages.NO_EMPLOYEES_AVAILABLE}
-              </div>
-            {/if}
-          </div>
-        </div>
+        <PickerTypeahead
+          bind:value={localMembers}
+          multiple={true}
+          searchParams={employeePickerParams}
+          labelledBy="team-members-label"
+          placeholderText="Mitarbeiter suchen…"
+          emptySelectionText={messages.NO_EMPLOYEES_AVAILABLE}
+        />
       </div>
 
       <div class="form-field">

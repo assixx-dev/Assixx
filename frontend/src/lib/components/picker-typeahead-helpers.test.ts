@@ -24,6 +24,7 @@ import {
   filterSuggestions,
   isOptionSelected,
   mapToPickerOption,
+  pickerOptionFromIdAndName,
   removeFromSelected,
   type PickerOption,
   type PickerUserRecord,
@@ -33,6 +34,7 @@ import {
 
 const SAMPLE_UUID = '01900000-0000-7000-8000-000000000001';
 const SAMPLE_EMAIL = 'alice@example.com';
+const SAMPLE_FULL_NAME = 'Alice Mueller';
 
 function makeUser(overrides: Partial<PickerUserRecord> = {}): PickerUserRecord {
   return {
@@ -60,12 +62,12 @@ function makeOption(id: number, label = `User ${id}`): PickerOption {
 describe('defaultFormatOption', () => {
   it('returns "FirstName LastName" + email sublabel when both names set', () => {
     const result = defaultFormatOption(makeUser());
-    expect(result).toEqual({ label: 'Alice Mueller', sublabel: SAMPLE_EMAIL });
+    expect(result).toEqual({ label: SAMPLE_FULL_NAME, sublabel: SAMPLE_EMAIL });
   });
 
   it('trims whitespace in names', () => {
     const result = defaultFormatOption(makeUser({ firstName: ' Alice ', lastName: ' Mueller ' }));
-    expect(result.label).toBe('Alice Mueller');
+    expect(result.label).toBe(SAMPLE_FULL_NAME);
   });
 
   it('falls back to email when both names null', () => {
@@ -101,7 +103,7 @@ describe('mapToPickerOption', () => {
   it('uses defaultFormatOption when no formatter passed', () => {
     const opt = mapToPickerOption(makeUser());
     expect(opt.id).toBe(1);
-    expect(opt.label).toBe('Alice Mueller');
+    expect(opt.label).toBe(SAMPLE_FULL_NAME);
     expect(opt.sublabel).toBe(SAMPLE_EMAIL);
     expect(opt.raw.email).toBe(SAMPLE_EMAIL);
   });
@@ -284,6 +286,71 @@ describe('filterSuggestions', () => {
   it('returns empty result when every fetched option is already selected', () => {
     const result = filterSuggestions(fetched, [makeOption(1), makeOption(2), makeOption(3)], true);
     expect(result).toEqual([]);
+  });
+});
+
+// ─── pickerOptionFromIdAndName ──────────────────────────────────────────────
+
+describe('pickerOptionFromIdAndName', () => {
+  it('returns null when id is null', () => {
+    expect(pickerOptionFromIdAndName(null, 'Alice')).toBeNull();
+  });
+
+  it('returns null when id is undefined', () => {
+    expect(pickerOptionFromIdAndName(undefined, 'Alice')).toBeNull();
+  });
+
+  it('returns null when label is null', () => {
+    expect(pickerOptionFromIdAndName(7, null)).toBeNull();
+  });
+
+  it('returns null when label is undefined', () => {
+    expect(pickerOptionFromIdAndName(7, undefined)).toBeNull();
+  });
+
+  it('returns null when label is empty string', () => {
+    expect(pickerOptionFromIdAndName(7, '')).toBeNull();
+  });
+
+  it('builds an option with stub raw when only id+label given', () => {
+    const opt = pickerOptionFromIdAndName(7, SAMPLE_FULL_NAME);
+    expect(opt).not.toBeNull();
+    expect(opt?.id).toBe(7);
+    expect(opt?.label).toBe(SAMPLE_FULL_NAME);
+    expect(opt?.raw).toEqual({
+      id: 7,
+      uuid: '',
+      firstName: null,
+      lastName: null,
+      email: '',
+    });
+  });
+
+  it('merges rawOverrides into the stub raw record', () => {
+    const opt = pickerOptionFromIdAndName(7, 'Alice', {
+      firstName: 'Alice',
+      lastName: 'Mueller',
+      email: 'alice@example.com',
+    });
+    expect(opt?.raw.firstName).toBe('Alice');
+    expect(opt?.raw.lastName).toBe('Mueller');
+    expect(opt?.raw.email).toBe('alice@example.com');
+    expect(opt?.raw.uuid).toBe('');
+  });
+
+  it('omits position/role from raw when not supplied (exactOptionalPropertyTypes)', () => {
+    const opt = pickerOptionFromIdAndName(7, 'Alice');
+    expect('position' in (opt?.raw ?? {})).toBe(false);
+    expect('role' in (opt?.raw ?? {})).toBe(false);
+  });
+
+  it('includes position/role on raw when supplied', () => {
+    const opt = pickerOptionFromIdAndName(7, 'Alice', {
+      position: 'area_lead',
+      role: 'admin',
+    });
+    expect(opt?.raw.position).toBe('area_lead');
+    expect(opt?.raw.role).toBe('admin');
   });
 });
 

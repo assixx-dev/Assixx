@@ -9,6 +9,10 @@
 
   import HighlightText from '$lib/components/HighlightText.svelte';
   import PermissionDenied from '$lib/components/PermissionDenied.svelte';
+  import {
+    pickerOptionFromIdAndName,
+    type PickerOption,
+  } from '$lib/components/picker-typeahead-helpers';
   import { showErrorAlert, showSuccessAlert } from '$lib/stores/toast';
   import { createLogger } from '$lib/utils/logger';
 
@@ -47,11 +51,12 @@
 
   const { data }: { data: PageData } = $props();
 
-  // SSR data via $derived - updates when invalidateAll() is called
+  // SSR data via $derived - updates when invalidateAll() is called.
+  // Lead + employee picker candidates are no longer SSR-prefetched —
+  // the modal owns the typeahead and queries `/users` debounced on
+  // demand (§D23 / Audit B2/B3).
   const allTeams = $derived(data.teams);
   const allDepartments = $derived(data.departments);
-  const allLeaders = $derived(data.leaders);
-  const allEmployees = $derived(data.employees);
   const allAssets = $derived(data.assets);
   // Hierarchy labels from layout data inheritance (A6)
   const labels = $derived(data.hierarchyLabels);
@@ -84,13 +89,16 @@
   let deleteTeamId = $state<number | null>(null);
   let forceDeleteMemberCount = $state(0);
 
-  // Form Fields
+  // Form Fields. Leader + deputy + members are full PickerOption objects
+  // post-§D23 (consumer extracts `.id` on submit). Edit-mode synth pulls
+  // `(id, name)` from the team row + the per-team `/teams/:id/members`
+  // call (which returns full TeamMember[] with first/last/email).
   let formName = $state('');
   let formDescription = $state('');
   let formDepartmentId = $state<number | null>(null);
-  let formLeaderId = $state<number | null>(null);
-  let formDeputyLeaderId = $state<number | null>(null);
-  let formMemberIds = $state<number[]>([]);
+  let formLeader = $state<PickerOption | null>(null);
+  let formDeputyLeader = $state<PickerOption | null>(null);
+  let formMembers = $state<PickerOption[]>([]);
   let formAssetIds = $state<number[]>([]);
   // Hall is no longer a form field — teams inherit it from their parent
   // department's hall_id (1:1 model after migration
@@ -214,7 +222,10 @@
    * Open edit modal - fetches members and assets from separate endpoints
    * The /teams list endpoint only returns summary data (memberCount, memberNames)
    * but NOT the full members[] and assets[] arrays needed for form population.
-   * Backend exposes separate endpoints: /teams/:id/members and /teams/:id/assets
+   * Backend exposes separate endpoints: /teams/:id/members and /teams/:id/assets.
+   *
+   * §D23: Leader + deputy synth from the team row's `(id, name)` pair.
+   * Members synth from the per-team members fetch (full TeamMember[]).
    */
   async function openEditModal(teamId: number): Promise<void> {
     const team = allTeams.find((t) => t.id === teamId);
@@ -232,12 +243,29 @@
     formName = team.name;
     formDescription = team.description ?? '';
     formDepartmentId = team.departmentId ?? null;
-    formLeaderId = team.leaderId ?? null;
-    formDeputyLeaderId = team.teamDeputyLeadId ?? null;
+    formLeader = pickerOptionFromIdAndName(team.leaderId, team.leaderName);
+    formDeputyLeader = pickerOptionFromIdAndName(team.teamDeputyLeadId, team.teamDeputyLeadName);
     formIsActive = team.isActive === 4 ? 0 : team.isActive;
 
-    // Set member and asset IDs from fetched data
-    formMemberIds = members.map((m) => m.id);
+    // Members come back as full TeamMember objects (`/teams/:id/members`
+    // returns the controller's `Promise<TeamMember[]>`). Map each to a
+    // PickerOption — pickerOptionFromIdAndName returns null when name is
+    // empty, so build the label inline (member rows always have a name).
+    formMembers = members.map<PickerOption>((m) => {
+      const label = `${m.firstName} ${m.lastName}`.trim();
+      return {
+        id: m.id,
+        label: label.length > 0 ? label : m.email,
+        sublabel: m.email,
+        raw: {
+          id: m.id,
+          uuid: '',
+          firstName: m.firstName,
+          lastName: m.lastName,
+          email: m.email,
+        },
+      };
+    });
     formAssetIds = assets.map((m) => m.id);
 
     showTeamModal = true;
@@ -270,9 +298,9 @@
     formName = defaults.name;
     formDescription = defaults.description;
     formDepartmentId = defaults.departmentId;
-    formLeaderId = defaults.leaderId;
-    formDeputyLeaderId = null;
-    formMemberIds = defaults.memberIds;
+    formLeader = null;
+    formDeputyLeader = null;
+    formMembers = [];
     formAssetIds = defaults.assetIds;
     formIsActive = defaults.isActive;
   }
@@ -654,14 +682,12 @@
       {formName}
       {formDescription}
       {formDepartmentId}
-      {formLeaderId}
-      {formDeputyLeaderId}
-      {formMemberIds}
+      {formLeader}
+      {formDeputyLeader}
+      {formMembers}
       {formAssetIds}
       {formIsActive}
       {allDepartments}
-      {allLeaders}
-      {allEmployees}
       {allAssets}
       {submitting}
       onclose={closeTeamModal}

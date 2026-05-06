@@ -5,7 +5,6 @@
 import { STATUS_BADGE_CLASSES, STATUS_LABELS, FORM_DEFAULTS } from './constants';
 
 import type {
-  AdminUser,
   Area,
   Department,
   DepartmentHallEntry,
@@ -55,15 +54,6 @@ export function getSelectedAreaName(areaId: number | null, areas: Area[]): strin
   if (areaId === null) return 'Keine Zuordnung';
   const area = areas.find((a) => a.id === areaId);
   return area?.name ?? 'Keine Zuordnung';
-}
-
-/** Get selected lead name for dropdown trigger */
-export function getSelectedLeadName(leadId: number | null, leads: AdminUser[]): string {
-  if (leadId === null) return 'Kein Leiter';
-  const lead = leads.find((l) => l.id === leadId);
-  if (!lead) return 'Kein Leiter';
-  const roleLabel = lead.role === 'root' ? '(Root)' : '(Admin)';
-  return `${lead.firstName} ${lead.lastName} ${roleLabel}`;
 }
 
 // =============================================================================
