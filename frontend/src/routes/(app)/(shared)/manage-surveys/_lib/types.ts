@@ -187,15 +187,7 @@ export interface SurveyApiResponse {
   id?: number;
 }
 
-/**
- * Paginated response
- */
-export interface PaginatedResponse<T> {
-  data: T[];
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
-}
+// `PaginatedResponse<T>` removed in Phase 4.10b — server-driven pagination
+// returns the canonical ADR-007 envelope and the FE consumes it via
+// `apiFetchPaginatedWithPermission<T>` from `$lib/server/api-fetch`, which
+// owns the typed shape (`PaginatedResult<T>` / `PaginatedPermissionResult<T>`).

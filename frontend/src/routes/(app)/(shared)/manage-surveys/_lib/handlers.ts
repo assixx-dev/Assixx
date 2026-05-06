@@ -5,14 +5,7 @@ import { notificationStore } from '$lib/stores/notification.store.svelte';
 import { showConfirmDanger, showErrorAlert, showSuccessAlert } from '$lib/utils';
 import { createLogger } from '$lib/utils/logger';
 
-import {
-  loadSurveys,
-  loadSurveyById,
-  createSurvey,
-  updateSurvey,
-  deleteSurvey,
-  completeSurvey,
-} from './api';
+import { loadSurveyById, createSurvey, updateSurvey, deleteSurvey, completeSurvey } from './api';
 import { ASSIGNMENT_BADGE_MAP, type AssignmentBadgeMap } from './constants';
 import { surveyAdminState } from './state.svelte';
 import {
@@ -58,15 +51,6 @@ export interface FormState {
     isOptional: boolean;
     options: string[];
   }[];
-}
-
-// =============================================================================
-// DATA LOADING
-// =============================================================================
-
-export async function reloadSurveys(): Promise<void> {
-  const surveys = await loadSurveys();
-  surveyAdminState.setSurveys(surveys);
 }
 
 // =============================================================================
@@ -504,16 +488,10 @@ async function saveSurveyCore(
   }
 }
 
-export async function saveSurvey(
-  status: SurveyStatus,
-  formState: FormState,
-  onSuccess: () => void,
-): Promise<void> {
-  await saveSurveyCore(status, formState, onSuccess, reloadSurveys);
-}
-
 /**
- * Level 3: Save survey and trigger invalidateAll for SSR refresh
+ * Save survey and trigger invalidateAll for SSR refresh.
+ * Phase 4.10b dropped the non-invalidate `saveSurvey` variant — every
+ * caller now flows through SSR + `invalidateAll()`.
  */
 export async function saveSurveyWithInvalidate(
   status: SurveyStatus,
@@ -553,24 +531,10 @@ export async function handleCompleteSurveyWithInvalidate(
 // DELETE SURVEY
 // =============================================================================
 
-export async function handleDeleteSurvey(surveyId: number | string): Promise<void> {
-  const confirmed = await showConfirmDanger(
-    'Diese Aktion kann nicht rückgängig gemacht werden. Alle Antworten werden ebenfalls gelöscht.',
-    'Umfrage löschen?',
-  );
-  if (!confirmed) return;
-
-  const result = await deleteSurvey(surveyId);
-  if (result.success) {
-    showSuccessAlert('Umfrage erfolgreich gelöscht');
-    await reloadSurveys();
-  } else {
-    showErrorAlert(result.error ?? 'Fehler beim Löschen der Umfrage');
-  }
-}
-
 /**
- * Level 3: Delete survey and trigger invalidateAll for SSR refresh
+ * Delete survey and trigger invalidateAll for SSR refresh.
+ * Phase 4.10b dropped the non-invalidate `handleDeleteSurvey` variant —
+ * every caller now flows through SSR + `invalidateAll()`.
  */
 export async function handleDeleteSurveyWithInvalidate(
   surveyId: number | string,
