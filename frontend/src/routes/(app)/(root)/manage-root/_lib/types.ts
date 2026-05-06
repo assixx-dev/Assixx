@@ -86,14 +86,7 @@ export interface PasswordStrengthResult {
   time: string;
 }
 
-/**
- * Pagination page item — UI representation of a page-button slot.
- *
- * Mirrors manage-admins / manage-employees / /logs so the same design-system
- * pagination markup can be reused 1:1.
- *
- * @see frontend/src/design-system/primitives/navigation/pagination.css
- */
-export type PaginationPageItem =
-  | { type: 'page'; value: number; active?: boolean }
-  | { type: 'ellipsis' };
+// `PaginationPageItem` was removed 2026-05-07 (Phase 5.2.2 URL-driven server
+// pagination). The new markup iterates `Array.from({length: totalPages})`
+// directly — see manage-admins (§4.2) / manage-employees (§4.1b) precedent.
+// @see docs/FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN.md §5.2.2

@@ -1,21 +1,55 @@
 <script lang="ts">
   /**
-   * Manage Root Users - Page Component
+   * Manage Root Users — Page Component (Phase 5.2.2 URL-driven state)
    * @module manage-root/+page
    *
-   * Level 3 SSR: $derived for SSR data, invalidateAll() after mutations.
+   * Mirrors `manage-admins/+page.svelte` (§4.2) per
+   * FEAT_SERVER_DRIVEN_PAGINATION_MASTERPLAN §5.2.2. URL holds pagination +
+   * search + status-filter state — there is NO `$state` shadow of these.
+   * Mutations call `invalidateAll()` to retrigger the load on the same URL,
+   * so `?page=N`/`?search=...`/`?isActive=N` are preserved across mutations.
+   *
+   * Root-only page (gated by `(root)/+layout.server.ts`, ADR-012). No
+   * `<PermissionDenied />` path is needed — the route group is fail-closed
+   * for non-root users.
    */
   import { goto, invalidateAll } from '$app/navigation';
   import { resolve } from '$app/paths';
 
   import AvailabilityModal from '$lib/availability/AvailabilityModal.svelte';
-  import SearchResultUser from '$lib/components/SearchResultUser.svelte';
   import { showSuccessAlert, showWarningAlert, showErrorAlert } from '$lib/stores/toast';
   import { resolvePositionDisplay } from '$lib/types/hierarchy-labels';
   import { getApiClient } from '$lib/utils/api-client';
   import { createLogger } from '$lib/utils/logger';
+  import { buildPaginatedHref } from '$lib/utils/url-pagination';
+
+  import { createRootMessages } from './_lib/constants';
+  import DeleteModals from './_lib/DeleteModals.svelte';
+  import {
+    executeSaveRootUser,
+    executeDeleteRootUser,
+    executeSaveAvailability,
+  } from './_lib/page-actions';
+  import RootUserModal from './_lib/RootUserModal.svelte';
+  import {
+    getStatusBadgeClass,
+    getStatusLabel,
+    formatDate,
+    getAvatarColor,
+    populateFormFromUser,
+    getDefaultFormValues,
+    validateEmailMatch,
+    validatePasswordMatch,
+    getAvailabilityBadge,
+    getPlannedAvailability,
+    getTruncatedNotes,
+  } from './_lib/utils';
+
+  import type { PageData } from './$types';
+  import type { FormIsActiveStatus, AvailabilityStatus } from './_lib/types';
 
   const apiClient = getApiClient();
+  const log = createLogger('ManageRootPage');
 
   async function loadUserPositions(userId: number): Promise<void> {
     try {
@@ -28,66 +62,31 @@
     }
   }
 
-  const log = createLogger('ManageRootPage');
-
-  import { createRootMessages } from './_lib/constants';
-  import DeleteModals from './_lib/DeleteModals.svelte';
-  import { applyAllFilters } from './_lib/filters';
-  import {
-    executeSaveRootUser,
-    executeDeleteRootUser,
-    executeSaveAvailability,
-  } from './_lib/page-actions';
-  import RootUserModal from './_lib/RootUserModal.svelte';
-  import {
-    getStatusBadgeClass,
-    getStatusLabel,
-    formatDate,
-    getAvatarColor,
-    getVisiblePages,
-    populateFormFromUser,
-    getDefaultFormValues,
-    validateEmailMatch,
-    validatePasswordMatch,
-    getAvailabilityBadge,
-    getPlannedAvailability,
-    getTruncatedNotes,
-    ROOTS_PER_PAGE,
-  } from './_lib/utils';
-
-  import type { PageData } from './$types';
-  import type { StatusFilter, FormIsActiveStatus, AvailabilityStatus } from './_lib/types';
-
-  // =============================================================================
-  // SSR DATA - Level 3: $derived from props (single source of truth)
-  // =============================================================================
+  // ============================================================================
+  // SSR DATA — URL is the single source of truth for page / search / status.
+  // ============================================================================
 
   const { data }: { data: PageData } = $props();
+
+  // SSR data via $derived — updates when invalidateAll() / goto() reruns load.
+  // `rootUsers` already represents the current page slice (server-paginated).
+  const rootUsers = $derived(data.rootUsers);
+  const positionOptions = $derived(data.positionOptions);
+  const pagination = $derived(data.pagination);
+  const searchTerm = $derived(data.search);
+  // `number | 'all'` — numeric IS_ACTIVE codes, single conversion in load.
+  const statusFilter = $derived(data.statusFilter);
 
   // Hierarchy labels from layout data inheritance (A6)
   const labels = $derived(data.hierarchyLabels);
   const messages = $derived(createRootMessages(labels));
 
-  // SSR data via $derived - updates when invalidateAll() is called
-  const allRootUsers = $derived(data.rootUsers);
-  const positionOptions = $derived(data.positionOptions);
+  // ============================================================================
+  // CLIENT STATE — only modal open/close + form fields are local.
+  // ============================================================================
 
-  // =============================================================================
-  // UI STATE - Filtering and form state (client-side only)
-  // =============================================================================
-
-  // Error state
+  // Error state (legacy — load function never throws now, kept for forward-compat).
   const error = $state<string | null>(null);
-
-  // Filter State
-  let currentStatusFilter = $state<StatusFilter>('active');
-  let currentSearchQuery = $state('');
-
-  // Pagination State (client-side, page slice over filteredUsers)
-  let currentPage = $state(1);
-
-  // Search State
-  let searchOpen = $state(false);
 
   // Modal States
   let showRootModal = $state(false);
@@ -123,56 +122,85 @@
   let passwordError = $state(false);
   let submitting = $state(false);
 
-  // =============================================================================
+  // Search input → URL debouncer. Local-only; URL is the authoritative state.
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const SEARCH_DEBOUNCE_MS = 300;
+
+  // ============================================================================
   // DERIVED VALUES
-  // =============================================================================
+  // ============================================================================
 
   const isEditMode = $derived(currentEditId !== null);
   const modalTitle = $derived(isEditMode ? messages.MODAL_TITLE_EDIT : messages.MODAL_TITLE_ADD);
 
-  // Derived: Filtered users based on current filter/search state
-  const filteredUsers = $derived(
-    applyAllFilters(allRootUsers, currentStatusFilter, currentSearchQuery),
-  );
-
-  // Derived: Pagination — slice the filtered set into the current page.
-  // Search dropdown still reads `filteredUsers` (full set) so a user can
-  // jump to a hit on any page; pagination only governs the table.
-  const totalPages = $derived(Math.max(1, Math.ceil(filteredUsers.length / ROOTS_PER_PAGE)));
-  const paginatedUsers = $derived(
-    filteredUsers.slice((currentPage - 1) * ROOTS_PER_PAGE, currentPage * ROOTS_PER_PAGE),
-  );
-  const visiblePages = $derived(getVisiblePages(currentPage, totalPages));
-
-  // Reset to page 1 when filter set changes — prevents user landing on
-  // an empty page after narrowing search/status. Mount-fire is a no-op.
-  $effect(() => {
-    void currentStatusFilter;
-    void currentSearchQuery;
-    currentPage = 1;
-  });
-
-  // Client-side pagination handlers (no URL update — KISS, see utils.ts).
-  function goToPage(p: number): void {
-    if (p >= 1 && p <= totalPages) currentPage = p;
-  }
-  function handlePreviousPage(): void {
-    if (currentPage > 1) currentPage -= 1;
-  }
-  function handleNextPage(): void {
-    if (currentPage < totalPages) currentPage += 1;
-  }
-
-  // Derived: Current user for availability modal
+  // Derived: Current user for availability modal. With server-side pagination
+  // the user may not be in the current slice if the user navigates pages
+  // while the modal is open — `find` returns undefined → fallback to null.
   const availabilityUser = $derived(
     availabilityUserId !== null ?
-      (allRootUsers.find((u) => u.id === availabilityUserId) ?? null)
+      (rootUsers.find((u) => u.id === availabilityUserId) ?? null)
     : null,
   );
 
-  // =============================================================================
+  // ============================================================================
+  // URL HELPERS — single source of truth for page/search/status
+  // ============================================================================
+
+  const BASE_PATH = '/manage-root';
+
+  /**
+   * Build an href for a target page, preserving current search + status.
+   * `buildPaginatedHref` skips defaults (page=1 / search='' / undefined),
+   * so canonical first-page URLs stay clean (`/manage-root`).
+   */
+  function pageHref(targetPage: number): string {
+    return resolve(
+      buildPaginatedHref(BASE_PATH, {
+        page: targetPage,
+        search: searchTerm,
+        isActive: statusFilter === 'all' ? undefined : String(statusFilter),
+      }),
+    );
+  }
+
+  /**
+   * Navigate to a new filter/search state. Page resets to 1 (default —
+   * not emitted into the URL).
+   */
+  function navigateFilters(next: { search?: string; statusFilter?: number | 'all' }): void {
+    const nextSearch = next.search ?? searchTerm;
+    const nextStatus = next.statusFilter ?? statusFilter;
+    const href = resolve(
+      buildPaginatedHref(BASE_PATH, {
+        // page omitted → resets to 1
+        search: nextSearch,
+        isActive: nextStatus === 'all' ? undefined : String(nextStatus),
+      }),
+    );
+    void goto(href, { keepFocus: true });
+  }
+
+  function handleStatusToggle(value: number | 'all'): void {
+    navigateFilters({ statusFilter: value });
+  }
+
+  function handleSearchInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const term = input.value;
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      navigateFilters({ search: term });
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function clearSearch(): void {
+    if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+    navigateFilters({ search: '' });
+  }
+
+  // ============================================================================
   // HELPERS
-  // =============================================================================
+  // ============================================================================
 
   function resetForm(): void {
     const d = getDefaultFormValues();
@@ -190,9 +218,9 @@
     passwordError = false;
   }
 
-  // =============================================================================
+  // ============================================================================
   // API FUNCTIONS - Level 3: invalidateAll() after mutations
-  // =============================================================================
+  // ============================================================================
 
   async function saveUser(): Promise<void> {
     submitting = true;
@@ -235,7 +263,7 @@
       if (result.success) {
         showSuccessAlert(isEditMode ? messages.SUCCESS_UPDATED : messages.SUCCESS_CREATED);
         closeRootModal();
-        // Level 3: Trigger SSR refetch
+        // Retrigger SSR load on the SAME URL (preserves ?page / ?search / ?isActive)
         await invalidateAll();
       } else {
         showErrorAlert(result.errorMessage ?? messages.ERROR_SAVING);
@@ -253,20 +281,19 @@
     if (result.success) {
       showSuccessAlert(messages.SUCCESS_DELETED);
       closeDeleteModal();
-      // Level 3: Trigger SSR refetch
       await invalidateAll();
     } else {
       showErrorAlert(result.errorMessage ?? messages.ERROR_DELETING);
     }
   }
 
-  // =============================================================================
+  // ============================================================================
   // AVAILABILITY MODAL HANDLERS
   // NOTE: Modal is CREATE-only. PUT/UPDATE is on history page.
-  // =============================================================================
+  // ============================================================================
 
   function openAvailabilityModal(userId: number): void {
-    const user = allRootUsers.find((u) => u.id === userId);
+    const user = rootUsers.find((u) => u.id === userId);
     if (!user) return;
 
     availabilityUserId = userId;
@@ -331,9 +358,9 @@
     void goto(resolve(`/manage-root/availability/${uuid}`));
   }
 
-  // =============================================================================
+  // ============================================================================
   // MODAL HANDLERS
-  // =============================================================================
+  // ============================================================================
 
   function openAddModal(): void {
     currentEditId = null;
@@ -342,7 +369,7 @@
   }
 
   function openEditModal(userId: number): void {
-    const user = allRootUsers.find((u) => u.id === userId);
+    const user = rootUsers.find((u) => u.id === userId);
     if (!user) return;
     currentEditId = userId;
     const f = populateFormFromUser(user);
@@ -386,31 +413,9 @@
     deleteUserId = null;
   }
 
-  // =============================================================================
-  // UI HANDLERS
-  // =============================================================================
-
-  function handleStatusToggle(status: StatusFilter): void {
-    currentStatusFilter = status;
-    // filteredUsers is $derived - automatically updates when filter changes
-  }
-
-  function handleSearchInput(e: Event): void {
-    currentSearchQuery = (e.target as HTMLInputElement).value;
-    searchOpen = currentSearchQuery.trim().length > 0;
-    // filteredUsers is $derived - automatically updates when search changes
-  }
-
-  function clearSearch(): void {
-    currentSearchQuery = '';
-    searchOpen = false;
-    // filteredUsers is $derived - automatically updates
-  }
-
-  function handleSearchResultClick(userId: number): void {
-    openEditModal(userId);
-    clearSearch();
-  }
+  // ============================================================================
+  // FORM-VALIDATION HELPERS (passed to RootUserModal)
+  // ============================================================================
 
   function handleFormSubmit(e: Event): void {
     e.preventDefault();
@@ -428,20 +433,6 @@
         !validatePasswordMatch(formPassword, formPasswordConfirm)
       : false;
   }
-
-  // Outside click for search
-  $effect(() => {
-    if (searchOpen) {
-      const handler = (e: MouseEvent): void => {
-        const el = document.querySelector('.search-input-wrapper');
-        if (el && !el.contains(e.target as HTMLElement)) searchOpen = false;
-      };
-      document.addEventListener('click', handler, true);
-      return () => {
-        document.removeEventListener('click', handler, true);
-      };
-    }
-  });
 </script>
 
 <svelte:head>
@@ -466,9 +457,9 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'active'}
+            class:active={statusFilter === 1}
             onclick={() => {
-              handleStatusToggle('active');
+              handleStatusToggle(1);
             }}
           >
             <i class="fas fa-user-check"></i> Aktive
@@ -476,9 +467,9 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'inactive'}
+            class:active={statusFilter === 0}
             onclick={() => {
-              handleStatusToggle('inactive');
+              handleStatusToggle(0);
             }}
           >
             <i class="fas fa-user-times"></i> Inaktive
@@ -486,9 +477,9 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'archived'}
+            class:active={statusFilter === 3}
             onclick={() => {
-              handleStatusToggle('archived');
+              handleStatusToggle(3);
             }}
           >
             <i class="fas fa-archive"></i> Archiviert
@@ -496,7 +487,7 @@
           <button
             type="button"
             class="toggle-group__btn"
-            class:active={currentStatusFilter === 'all'}
+            class:active={statusFilter === 'all'}
             onclick={() => {
               handleStatusToggle('all');
             }}
@@ -505,10 +496,7 @@
           </button>
         </div>
 
-        <div
-          class="search-input-wrapper max-w-80"
-          class:search-input-wrapper--open={searchOpen}
-        >
+        <div class="search-input-wrapper max-w-80">
           <div
             class="search-input"
             id="root-search-container"
@@ -519,44 +507,16 @@
               class="search-input__field"
               placeholder={messages.SEARCH_PLACEHOLDER}
               autocomplete="off"
-              value={currentSearchQuery}
+              value={searchTerm}
               oninput={handleSearchInput}
             />
             <button
               class="search-input__clear"
-              class:search-input__clear--visible={currentSearchQuery.length > 0}
+              class:search-input__clear--visible={searchTerm.length > 0}
               type="button"
               aria-label="Suche löschen"
               onclick={clearSearch}><i class="fas fa-times"></i></button
             >
-          </div>
-          <div class="search-input__results">
-            {#if currentSearchQuery && filteredUsers.length === 0}
-              <div class="search-input__no-results">
-                {messages.SEARCH_NO_RESULTS} "{currentSearchQuery}"
-              </div>
-            {:else if currentSearchQuery}
-              {#each filteredUsers.slice(0, 5) as user (user.id)}
-                <SearchResultUser
-                  id={user.id}
-                  firstName={user.firstName}
-                  lastName={user.lastName}
-                  email={user.email}
-                  employeeNumber={user.employeeNumber}
-                  role="root"
-                  position={user.position ?? messages.NO_POSITION}
-                  query={currentSearchQuery}
-                  onclick={() => {
-                    handleSearchResultClick(user.id);
-                  }}
-                />
-              {/each}
-              {#if filteredUsers.length > 5}
-                <div class="search-input__result-item search-input__result-more">
-                  {messages.moreResults(filteredUsers.length - 5)}
-                </div>
-              {/if}
-            {/if}
           </div>
         </div>
       </div>
@@ -581,7 +541,7 @@
             onclick={() => invalidateAll()}>Erneut versuchen</button
           >
         </div>
-      {:else if filteredUsers.length === 0}
+      {:else if rootUsers.length === 0}
         <div class="empty-state">
           <div class="empty-state__icon"><i class="fas fa-shield-alt"></i></div>
           <h3 class="empty-state__title">{messages.NO_USERS_FOUND}</h3>
@@ -616,7 +576,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each paginatedUsers as user (user.id)}
+              {#each rootUsers as user (user.id)}
                 {@const avBadge = getAvailabilityBadge(user)}
                 {@const planned = getPlannedAvailability(user)}
                 {@const additionalInfo = getTruncatedNotes(user.notes)}
@@ -675,12 +635,11 @@
                       <!--
                         Cross-root immutability: Delete is disabled because every
                         row on this page is another root account by construction
-                        (+page.server.ts:39 SSR filter excludes the current user
-                        + API filter `?role=root`). Backend Layer 2
-                        (users.service.deleteUser, wired Session 4) and Layer 4
-                        (DB trigger fn_prevent_cross_root_change) enforce the
-                        same rule server-side; this `disabled` is the Layer 1 UX
-                        hint per masterplan §5.2 / ADR-055. `openDeleteModal`
+                        (SSR self-exclusion + API filter `?role=root`). Backend
+                        Layer 2 (users.service.deleteUser) and Layer 4 (DB
+                        trigger fn_prevent_cross_root_change) enforce the same
+                        rule server-side; this `disabled` is the Layer 1 UX
+                        hint per masterplan §5.2 / ADR-055. `_openDeleteModal`
                         retained as a noop reference for grep — the disabled
                         attribute prevents click events from firing on <button>.
                       -->
@@ -699,48 +658,69 @@
             </tbody>
           </table>
         </div>
-        {#if totalPages > 1}
+        {#if pagination.totalPages > 1}
           <nav
             class="pagination"
             id="root-pagination"
           >
-            <button
-              type="button"
-              class="pagination__btn pagination__btn--prev"
-              onclick={handlePreviousPage}
-              disabled={currentPage === 1}
-            >
-              <i class="fas fa-chevron-left"></i> Zurück
-            </button>
+            {#if pagination.hasPrev}
+              <a
+                class="pagination__btn pagination__btn--prev"
+                href={pageHref(pagination.page - 1)}
+              >
+                <i class="fas fa-chevron-left"></i> Zurück
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--prev"
+                disabled
+              >
+                <i class="fas fa-chevron-left"></i> Zurück
+              </button>
+            {/if}
+
             <div class="pagination__pages">
-              {#each visiblePages as page, i (i)}
-                {#if page.type === 'ellipsis'}
-                  <span class="pagination__ellipsis">...</span>
-                {:else if page.type === 'page'}
+              {#each Array.from({ length: pagination.totalPages }, (_: unknown, i: number) => i + 1) as page (page)}
+                {#if page === pagination.page}
                   <button
                     type="button"
-                    class="pagination__page"
-                    class:pagination__page--active={page.active}
-                    onclick={() => {
-                      goToPage(page.value);
-                    }}
+                    class="pagination__page pagination__page--active"
+                    aria-current="page"
                   >
-                    {page.value}
+                    {page}
                   </button>
+                {:else}
+                  <a
+                    class="pagination__page"
+                    href={pageHref(page)}
+                  >
+                    {page}
+                  </a>
                 {/if}
               {/each}
             </div>
+
             <span class="pagination__info">
-              Seite {currentPage} von {totalPages} ({filteredUsers.length} Einträge)
+              Seite {pagination.page} von {pagination.totalPages} ({pagination.total} Einträge)
             </span>
-            <button
-              type="button"
-              class="pagination__btn pagination__btn--next"
-              onclick={handleNextPage}
-              disabled={currentPage === totalPages}
-            >
-              Weiter <i class="fas fa-chevron-right"></i>
-            </button>
+
+            {#if pagination.hasNext}
+              <a
+                class="pagination__btn pagination__btn--next"
+                href={pageHref(pagination.page + 1)}
+              >
+                Weiter <i class="fas fa-chevron-right"></i>
+              </a>
+            {:else}
+              <button
+                type="button"
+                class="pagination__btn pagination__btn--next"
+                disabled
+              >
+                Weiter <i class="fas fa-chevron-right"></i>
+              </button>
+            {/if}
           </nav>
         {/if}
         <div class="alert alert--info mt-6">
@@ -776,10 +756,10 @@
 
 <!--
   lockDestructiveStatus=true: every row on this page is another root account
-  (SSR filter excludes self at +page.server.ts:39, API filter `?role=root`),
-  so the Edit modal's status dropdown must NEVER offer Inaktiv/Archiviert
-  transitions. Backend Layer 4 trigger would 500 on such submits anyway —
-  this is the Layer 1 UX hint per masterplan §5.2 / ADR-055.
+  (SSR filter excludes self, API filter `?role=root`), so the Edit modal's
+  status dropdown must NEVER offer Inaktiv/Archiviert transitions. Backend
+  Layer 4 trigger would 500 on such submits anyway — this is the Layer 1 UX
+  hint per masterplan §5.2 / ADR-055.
 -->
 <RootUserModal
   {messages}
