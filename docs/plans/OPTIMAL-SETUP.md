@@ -61,20 +61,20 @@
 
 ## EXECUTIVE SUMMARY
 
-| Layer                  | IST (Current)           | SOLL (Optimal)              | Verdict |
-| ---------------------- | ----------------------- | --------------------------- | ------- |
-| **Runtime**            | Node.js                 | Node.js LTS                 | ✅ KEEP |
-| **Package Manager**    | pnpm                    | pnpm                        | ✅ KEEP |
-| **Backend Framework**  | **NestJS + Fastify**    | NestJS + Fastify            | ✅ DONE |
-| **Frontend Framework** | **SvelteKit**           | **SvelteKit + Svelte**      | ✅ DONE |
-| **Build Tool**         | Vite                    | Vite (SvelteKit native)     | ✅ KEEP |
-| **CSS Framework**      | Tailwind                | Tailwind                    | ✅ KEEP |
-| **Database**           | PostgreSQL + RLS        | PostgreSQL + RLS            | ✅ KEEP |
-| **Cache**              | Redis                   | Redis                       | ✅ KEEP |
-| **Validation**         | Zod + nestjs-zod        | Zod + nestjs-zod            | ✅ KEEP |
-| **Testing**            | **Vitest**              | Vitest                      | ✅ DONE |
-| **TypeScript**         | TypeScript              | TypeScript                  | ✅ DONE |
-| **ORM**                | Raw SQL (pg)            | Raw SQL (pg)                | ✅ KEEP |
+| Layer                  | IST (Current)        | SOLL (Optimal)          | Verdict |
+| ---------------------- | -------------------- | ----------------------- | ------- |
+| **Runtime**            | Node.js              | Node.js LTS             | ✅ KEEP |
+| **Package Manager**    | pnpm                 | pnpm                    | ✅ KEEP |
+| **Backend Framework**  | **NestJS + Fastify** | NestJS + Fastify        | ✅ DONE |
+| **Frontend Framework** | **SvelteKit**        | **SvelteKit + Svelte**  | ✅ DONE |
+| **Build Tool**         | Vite                 | Vite (SvelteKit native) | ✅ KEEP |
+| **CSS Framework**      | Tailwind             | Tailwind                | ✅ KEEP |
+| **Database**           | PostgreSQL + RLS     | PostgreSQL + RLS        | ✅ KEEP |
+| **Cache**              | Redis                | Redis                   | ✅ KEEP |
+| **Validation**         | Zod + nestjs-zod     | Zod + nestjs-zod        | ✅ KEEP |
+| **Testing**            | **Vitest**           | Vitest                  | ✅ DONE |
+| **TypeScript**         | TypeScript           | TypeScript              | ✅ DONE |
+| **ORM**                | Raw SQL (pg)         | Raw SQL (pg)            | ✅ KEEP |
 
 **0 Changes Remaining! 4 Changes COMPLETED (NestJS, Fastify, Vitest, SvelteKit). 9 Things Already Optimal.**
 
