@@ -6,9 +6,10 @@
 /** Dashboard statistics */
 export interface DashboardStats {
   employeeCount: number;
-  documentCount: number;
-  departmentCount: number;
   teamCount: number;
+  /** Pending approvals (status = 'pending') from /approvals/stats — feeds the
+   *  "Offene Genehmigungen" KPI card linking to /manage-approvals. */
+  pendingApprovalsCount: number;
 }
 
 /** Department entity */

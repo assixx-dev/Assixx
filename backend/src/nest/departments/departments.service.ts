@@ -493,6 +493,35 @@ export class DepartmentsService {
   }
 
   /**
+   * Execute the dynamic UPDATE and translate the area-mismatch trigger
+   * (trg_enforce_dept_hall_area_match, ADR-057) into BadRequestException
+   * instead of letting the P0001 leak as a 500. No-op when no fields changed.
+   *
+   * Extracted to keep updateDepartment under the 60-line max-lines-per-function
+   * cap (Power of Ten Rule 4 / CODE-OF-CONDUCT.md hard limits).
+   */
+  private async applyDepartmentUpdate(
+    id: number,
+    fields: string[],
+    values: unknown[],
+  ): Promise<void> {
+    if (fields.length === 0) return;
+    values.push(id);
+    try {
+      await this.db.tenantQuery(
+        `UPDATE departments SET ${fields.join(', ')} WHERE id = $${values.length}`,
+        values,
+      );
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      if (message.includes('Halls must match the department area') || message.includes('Hall ')) {
+        throw new BadRequestException(message);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Update a department
    */
   async updateDepartment(
@@ -526,13 +555,7 @@ export class DepartmentsService {
     await this.validateLeader(dto.departmentDeputyLeadId, tenantId);
 
     const { fields, values } = this.buildUpdateFields(dto);
-    if (fields.length > 0) {
-      values.push(id);
-      await this.db.tenantQuery(
-        `UPDATE departments SET ${fields.join(', ')} WHERE id = $${values.length}`,
-        values,
-      );
-    }
+    await this.applyDepartmentUpdate(id, fields, values);
 
     // Hall-area consistency is enforced by DB trigger trg_enforce_dept_hall_area_match
     // (see migration 20260505221345432). Application-level cleanup is no longer needed.

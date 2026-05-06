@@ -127,7 +127,7 @@ COPY --link --from=builder --chown=1001:1001 /app/backend/dist ./backend/dist
 | npm       | `11.9.0` (prod), `11.8.0` (dev, frontend)                 | `11.9.0` everywhere          |
 | pnpm      | `10.30.2` (prod hardcoded), `10.33.3` (dev, frontend ARG) | `10.33.3` via ARG everywhere |
 
-**Rationale**: CVE-2025-64756 requires npm >= 11.1.0. Using the latest (`11.9.0`) everywhere eliminates version drift. pnpm parameterized via `ARG PNPM_VERSION` for consistency with ADR-008.
+**Rationale**: CVE-2025-64756 requires a patched npm. Using the latest pinned version everywhere eliminates version drift. pnpm parameterized via `ARG PNPM_VERSION` for consistency with ADR-008.
 
 ### 8. HEALTHCHECK Improvements
 
@@ -399,7 +399,7 @@ doppler run -- docker-compose --profile observability --profile production up -d
 doppler run -- docker-compose --profile observability --profile production ps
 ```
 
-**Loki 3.6 → 3.7 risk:** The release notes indicate only "Go and gRPC upgrade" — no documented config schema changes. If `assixx-loki` becomes unhealthy after restart, inspect `docker logs assixx-loki --tail 50` and verify `docker/loki/loki-config.yml` against the current Loki 3.7.x reference schema.
+**Loki 3.6 → 3.7 risk:** The release notes indicate only "Go and gRPC upgrade" — no documented config schema changes. If `assixx-loki` becomes unhealthy after restart, inspect `docker logs assixx-loki --tail 50` and verify `docker/loki/loki-config.yml` against the current Loki reference schema.
 
 ### Troubleshooting: "Cannot find module" errors after stack update
 

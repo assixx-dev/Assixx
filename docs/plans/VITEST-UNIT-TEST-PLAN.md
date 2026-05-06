@@ -26,7 +26,7 @@
 
 | Was                | Status                                                                       |
 | ------------------ | ---------------------------------------------------------------------------- |
-| Vitest installiert | v4.0.18 + `@vitest/coverage-v8` + `@vitest/ui`                               |
+| Vitest installiert | `@vitest/coverage-v8` + `@vitest/ui`                                         |
 | `vitest.config.ts` | **FIXED** — alle 4 Fehler behoben (Phase 0)                                  |
 | `vitest.setup.ts`  | Erweitert: `TZ=UTC` für deterministische Date-Tests                          |
 | Test-Dateien       | **141 Dateien, 3059 Unit + 19 Frontend = 3078 Tests** — Phase 14 ✅ COMPLETE |

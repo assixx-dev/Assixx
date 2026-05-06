@@ -160,6 +160,23 @@
     return el?.contains(target) !== true;
   }
 
+  /**
+   * Closes a dropdown when it is open AND the click was outside its element.
+   * Extracted to keep the outside-click effect's arrow function at cyclomatic
+   * complexity 1 — five inline `if (open && outside)` checks pushed it to 11
+   * (ESLint `complexity` cap is 10, see [CODE-OF-CONDUCT.md] hard limits).
+   */
+  function closeIfOutside(
+    isOpen: boolean,
+    target: HTMLElement,
+    elementId: string,
+    close: () => void,
+  ): void {
+    if (isOpen && isClickOutsideElement(target, elementId)) {
+      close();
+    }
+  }
+
   // Reset local UI state when modal opens
   $effect(() => {
     if (show) {
@@ -183,21 +200,21 @@
 
     const handleClick = (e: MouseEvent): void => {
       const target = e.target as HTMLElement;
-      if (areaDropdownOpen && isClickOutsideElement(target, 'area-dropdown')) {
+      closeIfOutside(areaDropdownOpen, target, 'area-dropdown', () => {
         areaDropdownOpen = false;
-      }
-      if (leadDropdownOpen && isClickOutsideElement(target, 'lead-dropdown')) {
+      });
+      closeIfOutside(leadDropdownOpen, target, 'lead-dropdown', () => {
         leadDropdownOpen = false;
-      }
-      if (deputyLeadDropdownOpen && isClickOutsideElement(target, 'deputy-lead-dropdown')) {
+      });
+      closeIfOutside(deputyLeadDropdownOpen, target, 'deputy-lead-dropdown', () => {
         deputyLeadDropdownOpen = false;
-      }
-      if (hallDropdownOpen && isClickOutsideElement(target, 'hall-dropdown')) {
+      });
+      closeIfOutside(hallDropdownOpen, target, 'hall-dropdown', () => {
         hallDropdownOpen = false;
-      }
-      if (statusDropdownOpen && isClickOutsideElement(target, 'status-dropdown')) {
+      });
+      closeIfOutside(statusDropdownOpen, target, 'status-dropdown', () => {
         statusDropdownOpen = false;
-      }
+      });
     };
 
     document.addEventListener('click', handleClick, true);

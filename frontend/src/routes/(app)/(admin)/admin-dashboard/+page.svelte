@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import { goto } from '$app/navigation';
+  import { resolve } from '$app/paths';
 
   import { notificationStore } from '$lib/stores/notification.store.svelte';
   import { getApiClient } from '$lib/utils/api-client';
@@ -86,36 +87,44 @@
     id="dashboard-section"
     class="content-section"
   >
-    <!-- Dashboard Stats Grid - SSR: Data instantly available, no loading states -->
-    <div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-      <div class="card-stat">
+    <!-- Dashboard Stats Grid - SSR: Data instantly available, no loading states.
+         Pattern mirrors /root-dashboard: clickable card-stat--link cards with
+         Material Symbols icons. Each card is a deep-link to the matching
+         manage-* page (group-gated by ADR-012 fail-closed RBAC). -->
+    <div
+      id="dashboard-data"
+      class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"
+    >
+      <a
+        href={resolve('/manage-employees')}
+        class="card-stat card-stat--link"
+      >
         <div class="card-stat__icon">
-          <i class="fas fa-users"></i>
+          <span class="material-symbols-outlined">person_apron</span>
         </div>
         <div class="card-stat__value">{stats.employeeCount}</div>
         <div class="card-stat__label">Mitarbeiter</div>
-      </div>
-      <div class="card-stat">
+      </a>
+      <a
+        href={resolve('/manage-teams')}
+        class="card-stat card-stat--link"
+      >
         <div class="card-stat__icon">
-          <i class="fas fa-file-alt"></i>
-        </div>
-        <div class="card-stat__value">{stats.documentCount}</div>
-        <div class="card-stat__label">Dokumente</div>
-      </div>
-      <div class="card-stat">
-        <div class="card-stat__icon">
-          <i class="fas fa-building"></i>
-        </div>
-        <div class="card-stat__value">{stats.departmentCount}</div>
-        <div class="card-stat__label">{messages.STAT_DEPARTMENTS}</div>
-      </div>
-      <div class="card-stat">
-        <div class="card-stat__icon">
-          <i class="fas fa-user-friends"></i>
+          <span class="material-symbols-outlined">groups</span>
         </div>
         <div class="card-stat__value">{stats.teamCount}</div>
         <div class="card-stat__label">{messages.STAT_TEAMS}</div>
-      </div>
+      </a>
+      <a
+        href={resolve('/manage-approvals')}
+        class="card-stat card-stat--link"
+      >
+        <div class="card-stat__icon">
+          <span class="material-symbols-outlined">pending_actions</span>
+        </div>
+        <div class="card-stat__value">{stats.pendingApprovalsCount}</div>
+        <div class="card-stat__label">Offene Genehmigungen</div>
+      </a>
     </div>
 
     <!-- Blackboard Widget - SSR: Data instantly available -->
@@ -491,6 +500,38 @@
   /* Prevent FOUC during page load — body is outside component scope */
   :global(body:not(.loaded)) * {
     transition: none;
+  }
+
+  /* Clickable stat cards (Mitarbeiter / Teams / Offene Genehmigungen).
+   * WHY: <a> defaults (color, underline) clash with .card-stat's centered
+   * KPI styling. Reset link defaults so the anchor visually matches a
+   * non-clickable .card-stat, then add cursor:pointer + lift on hover to
+   * signal interactivity. Mirrors the /root-dashboard pattern. */
+  .card-stat--link {
+    display: block;
+    cursor: pointer;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .card-stat--link:hover {
+    color: inherit;
+    text-decoration: none;
+    transform: translateY(-2px);
+  }
+
+  /* All 3 stat-card icons are Material Symbols. Parent .card-stat__icon
+   * sets `font-size: 2rem` (32px); we scale up by ~20% (2.4rem ≈ 38.4px)
+   * for better visual weight in the KPI tiles. opsz 40 matches the new
+   * size on the optical-size axis so the glyph stays sharp. */
+  #dashboard-data .card-stat__icon :global(.material-symbols-outlined) {
+    font-size: 2.4rem;
+    line-height: 1;
+    font-variation-settings:
+      'FILL' 0,
+      'wght' 400,
+      'GRAD' 0,
+      'opsz' 40;
   }
 
   /* Compact Item - List items in accent cards */

@@ -195,7 +195,9 @@
         </span>
       </div>
     </div>
-    <div class="card-stat">
+    <!-- Position card has no __leads sibling like the 3 cards above, -->
+    <!-- so flex-center vertically aligns it within the equal-height grid cell. -->
+    <div class="card-stat flex flex-col justify-center">
       <div class="card-stat__icon">
         <i class="fas fa-user-tie"></i>
       </div>

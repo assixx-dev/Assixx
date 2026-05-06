@@ -299,6 +299,8 @@ export class TeamsService {
   async getTeamById(id: number, tenantId: number): Promise<TeamResponse> {
     this.logger.debug(`Fetching team ${id} for tenant ${tenantId}`);
 
+    // Hall is inherited transitively from department.hall_id (1:1 model after
+    // migration 20260505221345432_simplify-department-hall-1to1, see ADR-057).
     const rows = await this.db.tenantQuery<TeamRow>(
       `SELECT t.*,
         d.name as department_name,
@@ -314,10 +316,13 @@ export class TeamsService {
         (SELECT STRING_AGG(mm.name, ', ' ORDER BY mm.name)
          FROM asset_teams mmt
          JOIN assets mm ON mmt.asset_id = mm.id
-         WHERE mmt.team_id = t.id) as asset_names
+         WHERE mmt.team_id = t.id) as asset_names,
+        d.hall_id as hall_id,
+        h.name as hall_name
       FROM teams t
       LEFT JOIN departments d ON t.department_id = d.id
       LEFT JOIN areas a ON d.area_id = a.id
+      LEFT JOIN halls h ON d.hall_id = h.id AND h.is_active = ${IS_ACTIVE.ACTIVE}
       LEFT JOIN users u ON t.team_lead_id = u.id
       WHERE t.id = $1 AND t.tenant_id = $2`,
       [id, tenantId],

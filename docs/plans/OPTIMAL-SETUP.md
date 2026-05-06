@@ -20,13 +20,13 @@
 │  Completed: 13. Januar 2026                                    │
 │                                                                 │
 │  ✅ PHASE 0-2 ERREICHT (Backend):                               │
-│     - FullCalendar → @event-calendar/core v3.8.1              │
+│     - FullCalendar → @event-calendar/core                      │
 │     - 300/300 Endpoints migriert (100%)                        │
 │     - 26/26 Services Native NestJS                             │
 │     - 339 TypeScript Files in /nest/                           │
 │     - routes/v2/ komplett gelöscht (~166 Dateien)              │
-│     - @nestjs/platform-fastify + Fastify v5.6.2                │
-│     - Vitest 4.0.16 (Jest komplett entfernt)                   │
+│     - @nestjs/platform-fastify + Fastify                       │
+│     - Vitest (Jest komplett entfernt)                          │
 │                                                                 │
 │  ✅ PHASE 3 ERREICHT (Frontend):                                │
 │     - 34/34 Seiten migriert                                    │
@@ -39,11 +39,11 @@
 │  📄 FRONTEND: docs/SVELTEKIT-MIGRATION-PLAN.md                  │
 │                                                                 │
 │  ✅ PHASE 4 COMPLETE (Alerting & Monitoring):                    │
-│     ✅ Pino Logging (nestjs-pino 4.5.0 + pino-loki 3.0.0)       │
+│     ✅ Pino Logging (nestjs-pino + pino-loki)                  │
 │     ✅ Sentry Error Tracking (@sentry/nestjs + @sentry/sveltekit)│
 │     ✅ Grafana Loki Log Aggregation (Docker)                     │
 │     ✅ Prometheus Metrics Collection (Docker)                    │
-│     ✅ Grafana Dashboards (grafana:12.3.1)                       │
+│     ✅ Grafana Dashboards                                       │
 │     ✅ Graceful Shutdown (Sentry.close + enableShutdownHooks + WebSocket)
 │                                                                 │
 │  ✅ PHASE 4.5: DOPPLER SECRETS: COMPLETE                        │
@@ -63,17 +63,17 @@
 
 | Layer                  | IST (Current)           | SOLL (Optimal)              | Verdict |
 | ---------------------- | ----------------------- | --------------------------- | ------- |
-| **Runtime**            | Node.js 24.11.1         | Node.js 24 LTS              | ✅ KEEP |
-| **Package Manager**    | pnpm 10.24.0            | pnpm 10.x                   | ✅ KEEP |
-| **Backend Framework**  | **NestJS 11 + Fastify** | NestJS 11 + Fastify         | ✅ DONE |
-| **Frontend Framework** | **SvelteKit 5**         | **SvelteKit 5 + Svelte 5**  | ✅ DONE |
-| **Build Tool**         | Vite 7.2.6              | Vite 7.x (SvelteKit native) | ✅ KEEP |
-| **CSS Framework**      | Tailwind 4.1.17         | Tailwind 4.x                | ✅ KEEP |
-| **Database**           | PostgreSQL 17 + RLS     | PostgreSQL 17 + RLS         | ✅ KEEP |
-| **Cache**              | Redis 7                 | Redis 7                     | ✅ KEEP |
-| **Validation**         | Zod 4.x + nestjs-zod    | Zod 4.x + nestjs-zod        | ✅ KEEP |
-| **Testing**            | **Vitest 4.0.16**       | Vitest 4.x                  | ✅ DONE |
-| **TypeScript**         | 6.0.2                   | 6.0.x                       | ✅ DONE |
+| **Runtime**            | Node.js                 | Node.js LTS                 | ✅ KEEP |
+| **Package Manager**    | pnpm                    | pnpm                        | ✅ KEEP |
+| **Backend Framework**  | **NestJS + Fastify**    | NestJS + Fastify            | ✅ DONE |
+| **Frontend Framework** | **SvelteKit**           | **SvelteKit + Svelte**      | ✅ DONE |
+| **Build Tool**         | Vite                    | Vite (SvelteKit native)     | ✅ KEEP |
+| **CSS Framework**      | Tailwind                | Tailwind                    | ✅ KEEP |
+| **Database**           | PostgreSQL + RLS        | PostgreSQL + RLS            | ✅ KEEP |
+| **Cache**              | Redis                   | Redis                       | ✅ KEEP |
+| **Validation**         | Zod + nestjs-zod        | Zod + nestjs-zod            | ✅ KEEP |
+| **Testing**            | **Vitest**              | Vitest                      | ✅ DONE |
+| **TypeScript**         | TypeScript              | TypeScript                  | ✅ DONE |
 | **ORM**                | Raw SQL (pg)            | Raw SQL (pg)                | ✅ KEEP |
 
 **0 Changes Remaining! 4 Changes COMPLETED (NestJS, Fastify, Vitest, SvelteKit). 9 Things Already Optimal.**
@@ -90,13 +90,11 @@
 ```yaml
 Runtime:
   engine: Node.js
-  version: 24.11.1
   status: LTS (Active until April 2028)
   verdict: OPTIMAL
 
 Package Manager:
   tool: pnpm
-  version: 10.24.0
   workspaces: true
   verdict: OPTIMAL
 ```
@@ -106,7 +104,6 @@ Package Manager:
 ```yaml
 Backend Framework:
   name: NestJS
-  version: 11.x
   status: ✅ MIGRATED (18. Dezember 2025)
   migration_details: docs/NESTJS-MIGRATION-PLAN.md
   achievements:
@@ -120,20 +117,18 @@ Backend Framework:
 API Architecture:
   style: REST
   version: v2 (no v1 fallback)
-  validation: Zod 4.1.13
+  validation: Zod
   verdict: ✅ OPTIMAL (tRPC REJECTED - see ADR)
 
 Database:
   engine: PostgreSQL
-  version: 17-alpine
   security: Row Level Security (RLS)
   multi-tenant: tenant_id isolation
-  client: pg 8.16.3
+  client: pg
   verdict: OPTIMAL
 
 Cache:
   engine: Redis
-  version: 7-alpine
   use-cases: Rate-limiting, Session cache
   verdict: OPTIMAL
 ```
@@ -142,8 +137,8 @@ Cache:
 
 ```yaml
 Frontend Framework:
-  name: SvelteKit 5 + Svelte 5
-  bundler: Vite 7.2.6
+  name: SvelteKit + Svelte
+  bundler: Vite
   status: ✅ MIGRATED (11. Januar 2026)
   migration_details: docs/SVELTEKIT-MIGRATION-PLAN.md
   achievements:
@@ -156,7 +151,6 @@ Frontend Framework:
 
 CSS:
   framework: Tailwind CSS
-  version: 4.1.17
   status: Current
   plugins:
     - @tailwindcss/forms
@@ -176,7 +170,6 @@ Design System:
 ```yaml
 Testing:
   framework: Vitest
-  version: 4.0.16
   status: ✅ MIGRATED (18. Dezember 2025)
   achievements:
     - Jest komplett entfernt
@@ -187,19 +180,16 @@ Testing:
 
 Linting:
   tool: ESLint
-  version: 9.39.1
   config: Flat config (eslint.config.js)
   plugins: 15+ security/quality plugins
   verdict: OPTIMAL
 
 Formatting:
   tool: Prettier
-  version: 3.7.4
   verdict: OPTIMAL
 
 Type Checking:
   tool: TypeScript
-  version: 6.0.2
   strictness: Maximum (all strict flags enabled)
   verdict: OPTIMAL
 ```
@@ -209,11 +199,11 @@ Type Checking:
 ```yaml
 Containerization:
   tool: Docker + Docker Compose
-  base-image: node:24.11.1-alpine
+  base-image: node:alpine
   services:
     - backend (Node.js)
-    - postgres (PostgreSQL 17)
-    - redis (Redis 7)
+    - postgres (PostgreSQL)
+    - redis (Redis)
     - deletion-worker
   verdict: OPTIMAL
 
@@ -231,17 +221,14 @@ CI/CD:
 ```yaml
 Runtime:
   engine: Node.js
-  version: '>=24.11.1'
   reason: |
     - LTS support until April 2028
-    - V8 13.6 engine
     - Stable permission model
     - AsyncLocalStorage performance improvements
-    - HTTP/3 support (Undici 7)
+    - HTTP/3 support (Undici)
 
 Package Manager:
   tool: pnpm
-  version: '>=10.24.0'
   reason: |
     - Fastest package manager
     - Strict dependency management
@@ -306,7 +293,6 @@ onlyBuiltDependencies:
 ```yaml
 Backend Framework:
   name: NestJS
-  version: ">=11.x"
   adapter: Fastify (NOT Express)
   decision: NESTJS + FASTIFY (not Hono, not Express)
 
@@ -577,8 +563,7 @@ export class UsersController {
 ```yaml
 Database:
   engine: PostgreSQL
-  version: 17
-  client: pg 8.16.3
+  client: pg
 
 RLS Best Practices:
   - SET LOCAL app.current_tenant at request start
@@ -745,7 +730,6 @@ ALTER TABLE users FORCE ROW LEVEL SECURITY;
 ```yaml
 Validation:
   library: Zod
-  version: '>=4.1.13'
   integration: nestjs-zod
 
 Best Practice:
@@ -786,13 +770,11 @@ export class UpdateUserDto extends createZodDto(UpdateUserSchema) {}
 
 ### 2.3 Frontend Stack
 
-#### 2.3.1 Frontend Framework: SvelteKit 2 + Svelte 5
+#### 2.3.1 Frontend Framework: SvelteKit + Svelte
 
 ```yaml
 Frontend Framework:
   name: SvelteKit
-  version: '>=2.20.0'
-  svelte: '>=5.x'
   decision: SVELTEKIT (not Next.js, not Nuxt, not Vanilla)
 
 Why SvelteKit:
@@ -844,11 +826,11 @@ Why NOT keep Vanilla TS:
 
 **Aktuelle Assixx Dependencies - Status:**
 
-| Library          | Aktuell | Svelte 5?             | Aktion                 |
-| ---------------- | ------- | --------------------- | ---------------------- |
-| @fullcalendar/\* | 6.1.19  | ❌ **NEIN**           | → @event-calendar/core |
-| @zxcvbn-ts/\*    | 3.0.4   | ✅ Framework-agnostic | Behalten               |
-| dompurify        | 3.3.0   | ✅ Framework-agnostic | Behalten               |
+| Library          | Svelte 5?             | Aktion                 |
+| ---------------- | --------------------- | ---------------------- |
+| @fullcalendar/\* | ❌ **NEIN**           | → @event-calendar/core |
+| @zxcvbn-ts/\*    | ✅ Framework-agnostic | Behalten               |
+| dompurify        | ✅ Framework-agnostic | Behalten               |
 
 **KRITISCH: FullCalendar Migration erforderlich!**
 
@@ -874,7 +856,7 @@ Lösung:
 
 **@event-calendar/core Setup:**
 
-> **✅ AKTUELL: v5.0.5** - Upgrade durchgeführt 2025-12-22
+> **✅ AKTUELL** - Upgrade durchgeführt 2025-12-22
 > Alle Plugins in `@event-calendar/core` enthalten. Neue `createCalendar()` API.
 
 ```svelte
@@ -957,7 +939,6 @@ export default config;
 ```yaml
 Build Tool:
   name: Vite
-  version: '>=7.2.0'
   status: SvelteKit uses Vite natively
 
 Configuration:
@@ -966,12 +947,11 @@ Configuration:
   - Tailwind v4 plugin compatible
 ```
 
-#### 2.3.5 CSS: Tailwind v4 (NO CHANGE)
+#### 2.3.5 CSS: Tailwind (NO CHANGE)
 
 ```yaml
 CSS Framework:
   name: Tailwind CSS
-  version: '>=4.1.0'
 
 v4 Best Practices:
   - Use @import "tailwindcss" (single import)
@@ -990,7 +970,6 @@ Design System Migration:
 ```yaml
 Testing Framework:
   name: Vitest
-  version: '>=3.x'
   decision: VITEST (not Jest)
 
 Why Vitest:
@@ -1041,7 +1020,6 @@ export default defineConfig({
 
 ```yaml
 TypeScript:
-  version: '>=5.9.0'
   strictness: Maximum
 
 Your current config is OPTIMAL:
@@ -1161,8 +1139,8 @@ Pipelines:
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                      DEVELOPMENT                                 │
-│  Node.js 24 LTS | pnpm 10 | TypeScript 6.0 | Vitest 4          │
-│  ESLint 9 | Prettier 3 | Docker Compose                        │
+│  Node.js LTS | pnpm | TypeScript | Vitest                       │
+│  ESLint | Prettier | Docker Compose                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1170,27 +1148,9 @@ Pipelines:
 
 ## PART 4: VERSION MATRIX
 
-### Production Dependencies
-
-| Package                  | Current | Target    | Status |
-| ------------------------ | ------- | --------- | ------ |
-| node                     | 24.11.1 | >=24.11.1 | KEEP   |
-| pnpm                     | 10.24.0 | >=10.24.0 | KEEP   |
-| typescript               | 6.0.2   | >=6.0.0   | DONE   |
-| @nestjs/core             | -       | >=11.0.0  | NEW    |
-| @nestjs/platform-fastify | -       | >=11.0.0  | NEW    |
-| @nestjs/websockets       | -       | >=11.0.0  | NEW    |
-| @nestjs/bull             | -       | >=11.0.0  | NEW    |
-| nestjs-zod               | -       | >=4.0.0   | NEW    |
-| fastify                  | -       | >=5.0.0   | NEW    |
-| zod                      | 4.1.13  | >=4.1.0   | KEEP   |
-| pg                       | 8.16.3  | >=8.16.0  | KEEP   |
-| redis                    | 5.10.0  | >=5.10.0  | KEEP   |
-| @sveltejs/kit            | -       | >=2.20.0  | NEW    |
-| svelte                   | -       | >=5.0.0   | NEW    |
-| vite                     | 7.2.6   | >=7.2.0   | KEEP   |
-| tailwindcss              | 4.1.17  | >=4.1.0   | KEEP   |
-| vitest                   | -       | >=3.0.0   | NEW    |
+> Versions live in `package.json` (`engines`, `dependencies`, `devDependencies`)
+> and `docker/Dockerfile*` ARGs as the single source of truth.
+> Use `pnpm outdated` for the current-vs-target view.
 
 ### Removed Dependencies
 
@@ -1349,8 +1309,8 @@ pnpm add pino
 | Aspekt       | Details                                                         |
 | ------------ | --------------------------------------------------------------- |
 | **Status**   | ✅ COMPLETE (13. Januar 2026)                                   |
-| **Backend**  | @sentry/nestjs 10.33.3, instrument.ts, beforeSend filters       |
-| **Frontend** | @sentry/sveltekit 10.33.3, instrumentation.server.ts            |
+| **Backend**  | @sentry/nestjs, instrument.ts, beforeSend filters               |
+| **Frontend** | @sentry/sveltekit, instrumentation.server.ts                    |
 | **Features** | Distributed tracing, environment-aware sampling, PII protection |
 
 ```bash
@@ -1533,16 +1493,16 @@ services:
 
 | Was                                   | Status      | Details                                                                                                                                                          |
 | ------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pino Logger                           | ✅ COMPLETE | nestjs-pino 4.5.0, pino-loki 3.0.0                                                                                                                               |
+| Pino Logger                           | ✅ COMPLETE | nestjs-pino, pino-loki                                                                                                                                           |
 | Sensitive Data Sanitization           | ✅ COMPLETE | Pino `redact` mit 40+ Pfaden                                                                                                                                     |
 | Rate Limiting                         | ✅ COMPLETE | Redis-based, @nestjs/throttler                                                                                                                                   |
 | Health Check                          | ✅ COMPLETE | GET /health, Docker healthcheck                                                                                                                                  |
 | Sentry Error Tracking                 | ✅ COMPLETE | Backend + Frontend SDK                                                                                                                                           |
 | Loki Log Aggregation                  | ✅ COMPLETE | Docker + pino-loki transport                                                                                                                                     |
-| Grafana Dashboards                    | ✅ COMPLETE | grafana:12.3.1, Port 3050                                                                                                                                        |
-| Prometheus Metrics                    | ✅ COMPLETE | prom/prometheus:v3.11.1                                                                                                                                          |
-| **DB Visibility (Postgres-Exporter)** | ✅ COMPLETE | prometheuscommunity/postgres-exporter:v0.18.0 — pg_up, connections, locks, bgwriter (2026-04-18, ADR-002 Phase 5f)                                               |
-| **Cache Visibility (Redis-Exporter)** | ✅ COMPLETE | oliver006/redis_exporter:v1.74.0-alpine — hit ratio, memory, evictions (2026-04-18, ADR-002 Phase 5f)                                                            |
+| Grafana Dashboards                    | ✅ COMPLETE | grafana, Port 3050                                                                                                                                               |
+| Prometheus Metrics                    | ✅ COMPLETE | prom/prometheus                                                                                                                                                  |
+| **DB Visibility (Postgres-Exporter)** | ✅ COMPLETE | prometheuscommunity/postgres-exporter — pg_up, connections, locks, bgwriter (2026-04-18, ADR-002 Phase 5f)                                                       |
+| **Cache Visibility (Redis-Exporter)** | ✅ COMPLETE | oliver006/redis_exporter — hit ratio, memory, evictions (2026-04-18, ADR-002 Phase 5f)                                                                           |
 | **Alert-Rules-as-Code**               | ✅ COMPLETE | 3 critical rules (Backend Down, Postgres Down, Backend Memory >800MB) in `docker/grafana/alerts/*.json` + idempotentes `apply.sh` (2026-04-18, ADR-002 Phase 5g) |
 | Graceful Shutdown                     | ✅ COMPLETE | SIGTERM/SIGINT/SIGHUP, Sentry.close(), enableShutdownHooks(), WebSocket cleanup                                                                                  |
 
