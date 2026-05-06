@@ -65,11 +65,29 @@ const ORDER_SELECT_WITH_READ_SQL = `
 // Exported types
 // ============================================================================
 
+/**
+ * Canonical paginated envelope (ADR-007 + Masterplan Phase 4.7a, 2026-05-06).
+ *
+ * Mirrors the shape that `ResponseInterceptor.isPaginatedResponse` recognises
+ * (`common/interceptors/response.interceptor.ts:65`) so `meta.pagination` is
+ * auto-lifted into the outer envelope. Pre-Phase-4.7a we shipped a flat
+ * `{ items, total, page, pageSize }` — the missing `pagination` wrapper meant
+ * the interceptor returned `false` and `meta.pagination` was never emitted.
+ * Same drift category as §D9 KVP (broken-by-shape).
+ *
+ * Phase 3.1 dummy-users + Phase 4.5a KVP precedent: `items[]` plus
+ * `pagination: { page, limit, total, totalPages }`. `pageSize` renamed to
+ * canonical `limit`; `totalPages` computed as `Math.ceil(total / limit)`,
+ * `0` when `total === 0` (matches Phase 3.1 math).
+ */
 export interface PaginatedWorkOrders {
   items: WorkOrderListItem[];
-  total: number;
-  page: number;
-  pageSize: number;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 /** Shared query filter shape (all optional fields accept undefined) */
@@ -646,8 +664,10 @@ export class WorkOrdersService {
       scopeTeamIds,
     );
     const page = query.page ?? 1;
-    const pageSize = query.limit ?? 20;
-    const offset = (page - 1) * pageSize;
+    // Phase 4.7a (2026-05-06): renamed from `pageSize` to canonical `limit`
+    // (matches PaginatedWorkOrders.pagination.limit + ADR-007 envelope).
+    const limit = query.limit ?? 20;
+    const offset = (page - 1) * limit;
 
     const countResult = await this.db.tenantQueryOne<{ count: string }>(
       `SELECT COUNT(*) AS count FROM work_orders wo
@@ -670,14 +690,21 @@ export class WorkOrdersService {
          CASE wo.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,
          wo.created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-      [...params, currentUserId, tenantId, pageSize, offset],
+      [...params, currentUserId, tenantId, limit, offset],
     );
 
+    // totalPages: 0 when total is 0 (avoids Math.ceil(0/N) === 0 edge case
+    // confusion vs. a "1 empty page" reading). Mirrors Phase 3.1 dummy-users
+    // + Phase 4.5a KVP precedent.
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
     return {
       items: rows.map(mapWorkOrderRowToListItem),
-      total,
-      page,
-      pageSize,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
     };
   }
 }

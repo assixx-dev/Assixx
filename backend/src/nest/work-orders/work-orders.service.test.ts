@@ -328,9 +328,14 @@ describe('listWorkOrders', () => {
 
     const result = await service.listWorkOrders(1, 5, {});
 
-    expect(result.total).toBe(5);
-    expect(result.page).toBe(1);
-    expect(result.pageSize).toBe(20);
+    // Phase 4.7a (2026-05-06): canonical envelope shape — pagination is now
+    // a nested object, `pageSize` renamed to `limit`, `totalPages` added.
+    // ResponseInterceptor.isPaginatedResponse requires this shape to lift
+    // pagination into meta.pagination (response.interceptor.ts:65).
+    expect(result.pagination.total).toBe(5);
+    expect(result.pagination.page).toBe(1);
+    expect(result.pagination.limit).toBe(20);
+    expect(result.pagination.totalPages).toBe(1); // Math.ceil(5 / 20) = 1
     expect(result.items).toHaveLength(1);
   });
 
@@ -340,8 +345,10 @@ describe('listWorkOrders', () => {
 
     const result = await service.listWorkOrders(1, 5, { page: 3, limit: 10 });
 
-    expect(result.page).toBe(3);
-    expect(result.pageSize).toBe(10);
+    expect(result.pagination.page).toBe(3);
+    expect(result.pagination.limit).toBe(10);
+    expect(result.pagination.total).toBe(100);
+    expect(result.pagination.totalPages).toBe(10); // Math.ceil(100 / 10) = 10
   });
 
   it('should apply status filter', async () => {
@@ -390,7 +397,10 @@ describe('listWorkOrders', () => {
 
     const result = await service.listWorkOrders(1, 5, {});
 
-    expect(result.total).toBe(0);
+    expect(result.pagination.total).toBe(0);
+    // Phase 4.7a: totalPages is 0 (not 1) when total=0 — avoids the "1 empty
+    // page" reading. Mirrors Phase 3.1 dummy-users + Phase 4.5a KVP precedent.
+    expect(result.pagination.totalPages).toBe(0);
     expect(result.items).toEqual([]);
   });
 
@@ -399,7 +409,8 @@ describe('listWorkOrders', () => {
     mockDb.query.mockResolvedValueOnce([]);
 
     const result = await service.listWorkOrders(1, 5, {});
-    expect(result.total).toBe(0);
+    expect(result.pagination.total).toBe(0);
+    expect(result.pagination.totalPages).toBe(0);
   });
 
   it('should apply sourceUuid filter', async () => {

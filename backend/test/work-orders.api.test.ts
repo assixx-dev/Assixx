@@ -73,19 +73,25 @@ describe('Work Orders: Create', () => {
 // ============================================================================
 
 describe('Work Orders: List All (Admin)', () => {
-  it('should return 200 with paginated structure', async () => {
+  it('should return 200 with canonical ADR-007 paginated envelope', async () => {
     const res = await fetch(`${BASE_URL}/work-orders`, {
       headers: authOnly(auth.authToken),
     });
     const body = (await res.json()) as JsonBody;
 
+    // Phase 4.7a (2026-05-06): canonical envelope — body.data is the items
+    // array (extracted by ResponseInterceptor.extractPaginatedItems), pagination
+    // metadata lifted into body.meta.pagination. Pre-Phase-4.7a returned a flat
+    // {items, total, page, pageSize} bag because the missing `pagination`
+    // wrapper bypassed the interceptor's isPaginatedResponse check (§D9 lesson).
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(body.data.items).toBeDefined();
-    expect(Array.isArray(body.data.items)).toBe(true);
-    expect(body.data.total).toBeGreaterThanOrEqual(1);
-    expect(body.data.page).toBe(1);
-    expect(body.data.pageSize).toBeDefined();
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.data.length).toBeGreaterThanOrEqual(1);
+    expect(body.meta.pagination.page).toBe(1);
+    expect(body.meta.pagination.limit).toBe(20); // ListWorkOrdersQuerySchema default
+    expect(body.meta.pagination.total).toBeGreaterThanOrEqual(1);
+    expect(body.meta.pagination.totalPages).toBeGreaterThanOrEqual(1);
   });
 
   it('should support status filter', async () => {
@@ -95,7 +101,7 @@ describe('Work Orders: List All (Admin)', () => {
     const body = (await res.json()) as JsonBody;
 
     expect(res.status).toBe(200);
-    for (const item of body.data.items) {
+    for (const item of body.data) {
       expect(item.status).toBe('open');
     }
   });
@@ -107,8 +113,28 @@ describe('Work Orders: List All (Admin)', () => {
     const body = (await res.json()) as JsonBody;
 
     expect(res.status).toBe(200);
-    expect(body.data.items.length).toBeLessThanOrEqual(1);
-    expect(body.data.pageSize).toBe(1);
+    expect(body.data.length).toBeLessThanOrEqual(1);
+    expect(body.meta.pagination.limit).toBe(1);
+    expect(body.meta.pagination.page).toBe(1);
+  });
+
+  it('should echo ?page=2&limit=10 with correct totalPages math', async () => {
+    // Mirrors Phase 3.1 dummy-users + Phase 4.5a KVP precedent — verifies
+    // the ResponseInterceptor lift + service-side Math.ceil(total/limit)
+    // against an arbitrary slice. Independent of seeded row count: derives
+    // expected totalPages from the live total field.
+    const res = await fetch(`${BASE_URL}/work-orders?page=2&limit=10`, {
+      headers: authOnly(auth.authToken),
+    });
+    const body = (await res.json()) as JsonBody;
+
+    expect(res.status).toBe(200);
+    expect(body.meta.pagination.page).toBe(2);
+    expect(body.meta.pagination.limit).toBe(10);
+    const total = body.meta.pagination.total as number;
+    const expectedPages = total === 0 ? 0 : Math.ceil(total / 10);
+    expect(body.meta.pagination.totalPages).toBe(expectedPages);
+    expect(body.data.length).toBeLessThanOrEqual(10);
   });
 });
 
@@ -485,17 +511,22 @@ describe('Work Orders: Eligible Users', () => {
 // ============================================================================
 
 describe('Work Orders: My Work Orders', () => {
-  it('should return 200 with paginated structure', async () => {
+  it('should return 200 with canonical ADR-007 paginated envelope', async () => {
     const res = await fetch(`${BASE_URL}/work-orders/my`, {
       headers: authOnly(auth.authToken),
     });
     const body = (await res.json()) as JsonBody;
 
+    // Phase 4.7a: same envelope as /work-orders (admin) — listMyWorkOrders
+    // delegates to the same buildPaginatedList helper. Total may legitimately
+    // be 0 when the apitest user has no assignments.
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(body.data.items).toBeDefined();
-    expect(Array.isArray(body.data.items)).toBe(true);
-    expect(typeof body.data.total).toBe('number');
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta.pagination.page).toBe(1);
+    expect(body.meta.pagination.limit).toBe(20);
+    expect(typeof body.meta.pagination.total).toBe('number');
+    expect(typeof body.meta.pagination.totalPages).toBe('number');
   });
 });
 
